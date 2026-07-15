@@ -1,0 +1,281 @@
+{
+  "title": "EAOS Overview",
+  "uid": "eaos-overview",
+  "version": 1,
+  "schemaVersion": 39,
+  "tags": ["eaos", "enterprise-agent-os"],
+  "timezone": "browser",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Trace Span Rate",
+      "description": "Spans received by the OTel collector per second. Sourced from collector self-telemetry (otelcol_receiver_accepted_spans). Drops to zero when no traces flow.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "eaos-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(otelcol_receiver_accepted_spans[5m]))",
+          "legendFormat": "spans/s",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "eaos-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "p95 Span Latency",
+      "description": "95th percentile span duration (ms) over time, computed from trace.spans. Higher granularity spans (call/tool) dominate; use the status filter to isolate errors.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "eaos-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroup(start_time, '5m') AS time, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_latency_ms FROM trace.spans WHERE $__timeFilter(start_time) AND duration_ms IS NOT NULL GROUP BY 1 ORDER BY 1",
+          "datasource": {
+            "type": "postgres",
+            "uid": "eaos-postgres"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Cost Quota (cumulative USD)",
+      "description": "Cumulative cost in USD from trace.spans.cost_usd, bucketed hourly. Use this to track spend against tenant cost quotas enforced by the Harness CostGovernor.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "eaos-postgres"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroup(start_time, '1h') AS time, SUM(cost_usd) AS cost_usd FROM trace.spans WHERE $__timeFilter(start_time) GROUP BY 1 ORDER BY 1",
+          "datasource": {
+            "type": "postgres",
+            "uid": "eaos-postgres"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "hidden",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "bargauge",
+      "title": "Top Skills by Call Count",
+      "description": "Skill adoption proxy: tool-granularity spans grouped by name, ranked by call count in the selected time window. Higher counts indicate broader adoption across agents.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "eaos-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT name AS skill, COUNT(*) AS calls FROM trace.spans WHERE granularity = 'tool' AND $__timeFilter(start_time) GROUP BY name ORDER BY calls DESC LIMIT 10",
+          "datasource": {
+            "type": "postgres",
+            "uid": "eaos-postgres"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 200
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "displayMode": "gradient",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "piechart",
+      "title": "Evolution Stage Distribution",
+      "description": "Current distribution of evolution strategies across governance stages (feedback → dataset → training → guardrail → shadow → approval → canary → full). Stuck strategies appear in 'blocked' stage_status.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "eaos-postgres"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT stage AS metric, COUNT(*) AS value FROM harness.evolution_strategies GROUP BY stage ORDER BY value DESC",
+          "datasource": {
+            "type": "postgres",
+            "uid": "eaos-postgres"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        }
+      }
+    }
+  ]
+}

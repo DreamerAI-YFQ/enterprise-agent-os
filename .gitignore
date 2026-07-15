@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+develop/
+.installed.cfg
+bin/
+/lib/
+pyvenv.cfg
+include/
+share/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.cache/
+.tox/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+.trae/
+*.swp
+*.swo
+.DS_Store
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# K8s real secrets (only secret.yaml.example is committed)
+deploy/k8s/secret.yaml
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Docker
+*.log
+
+# Local DB artifacts
+*.sqlite3
+*.db
+
+# Frontend
+node_modules/
+frontend/*/dist/
+frontend/*/node_modules/
+frontend/.pnpm-store/
+
+# Tauri / Rust build output
+target/
+**/src-tauri/target/
+
+# Uploads (user-generated content)
+uploads/

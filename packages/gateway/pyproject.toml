@@ -1,0 +1,37 @@
+[project]
+name = "eaos-gateway"
+version = "0.1.0"
+description = "EAOS L5 user interaction: FastAPI, IM gateway (DingTalk/Slack/WeCom/Feishu), multimodal"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "eaos-core",
+    "eaos-infra",
+    "eaos-agent",
+    "eaos-skills",
+    "eaos-knowledge",
+    "eaos-observability",
+    "eaos-harness",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "uvicorn[standard]>=0.29",
+    "pypdf>=4.0",
+    "authlib>=1.3",
+    "ldap3>=2.9",
+    "python3-saml>=1.16",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eaos"]
+
+[tool.uv.sources]
+eaos-core = { workspace = true }
+eaos-infra = { workspace = true }
+eaos-agent = { workspace = true }
+eaos-skills = { workspace = true }
+eaos-knowledge = { workspace = true }
+eaos-observability = { workspace = true }
+eaos-harness = { workspace = true }

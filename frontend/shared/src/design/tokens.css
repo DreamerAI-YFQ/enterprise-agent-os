@@ -1,0 +1,101 @@
+/*
+ * EAOS Design Tokens — Apple-inspired enterprise design system
+ * Values sourced from Frontend_Development_Plan.md §1.5
+ */
+
+:root {
+  /* ===== Color ===== */
+  --color-bg-base: #fafafa;        /* page background */
+  --color-bg-elevated: #ffffff;   /* cards / popovers */
+  --color-bg-subtle: #f5f5f7;     /* secondary bg / inputs / hover */
+  --color-bg-muted: #ebebed;      /* chips / disabled */
+
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #86868b;
+
+  --color-accent: #0071e3;        /* Apple blue — primary action */
+  --color-accent-hover: #0077ed;
+  --color-accent-active: #006edb;
+  --color-accent-subtle: #e8f1fd;
+
+  --color-success: #34c759;
+  --color-success-subtle: #e8f9ed;
+  --color-warning: #ff9500;
+  --color-warning-subtle: #fff3e0;
+  --color-danger: #ff3b30;
+  --color-danger-subtle: #ffecec;
+  --color-info: #5ac8fa;
+  --color-info-subtle: #e6f7ff;
+
+  --color-border: #d2d2d7;
+  --color-border-strong: #a1a1a6;
+  --color-border-subtle: #e8e8ed;
+
+  /* ===== Typography ===== */
+  --font-sans: -apple-system, "SF Pro Display", "SF Pro Text", "Inter",
+    system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* Type scale (Apple Type Scale) */
+  --text-xs: 0.75rem;     /* 12px */
+  --text-xs--line-height: 1.3333; /* 16px */
+  --text-sm: 0.875rem;    /* 14px */
+  --text-sm--line-height: 1.4286; /* 20px */
+  --text-base: 0.9375rem; /* 15px */
+  --text-base--line-height: 1.6;   /* 24px */
+  --text-lg: 1.0625rem;   /* 17px */
+  --text-lg--line-height: 1.6471; /* 28px */
+  --text-xl: 1.25rem;     /* 20px */
+  --text-xl--line-height: 1.4;    /* 28px */
+  --text-2xl: 1.75rem;    /* 28px */
+  --text-2xl--line-height: 1.2857; /* 36px */
+  --text-3xl: 2rem;       /* 32px */
+  --text-3xl--line-height: 1.25;  /* 40px */
+
+  /* ===== Spacing (8px grid) ===== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ===== Radius ===== */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* ===== Shadow (subtle, never loud) ===== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-focus: 0 0 0 4px rgba(0, 113, 227, 0.18);
+
+  /* ===== Motion ===== */
+  --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+
+  /* ===== Layout ===== */
+  --nav-width: 240px;
+  --nav-width-collapsed: 64px;
+  --content-max: 1280px;
+  --topbar-height: 56px;
+
+  /* ===== Z-index scale ===== */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-drawer: 200;
+  --z-popover: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+}

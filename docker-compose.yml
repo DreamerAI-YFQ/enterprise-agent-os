@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: eaos-postgres
+    environment:
+      POSTGRES_DB: eaos
+      POSTGRES_USER: eaos
+      POSTGRES_PASSWORD: eaos
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eaos -d eaos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: eaos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: eaos-jaeger
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: eaos-otel-collector
+    volumes:
+      - ./deploy/docker/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      - jaeger
+    ports:
+      - "14317:4317"
+      - "14318:4318"
+      - "18888:8888"
+      - "18889:8889"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: eaos-prometheus
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: eaos-grafana
+    env_file: .env
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./deploy/observability/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - postgres
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    container_name: eaos-api
+    command: ["/app/.venv/bin/uvicorn", "eaos_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      # Override .env's localhost to use container-network hostnames
+      EAOS_DB__URL: postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos
+      EAOS_REDIS__URL: redis://eaos-redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.worker
+    container_name: eaos-worker
+    env_file: .env
+    environment:
+      EAOS_DB__URL: postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos
+      EAOS_REDIS__URL: redis://eaos-redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    container_name: eaos-migrate
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      EAOS_DB__URL: postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos
+      EAOS_REDIS__URL: redis://eaos-redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  mock-saas:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.mock_saas
+    container_name: eaos-mock-saas
+    ports:
+      - "18000:18000"
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

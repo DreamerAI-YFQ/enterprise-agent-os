@@ -1,0 +1,62 @@
+# Development-grade Postgres StatefulSet with pgvector.
+# For production, use a managed Postgres (RDS / Cloud SQL / AlloyDB) and
+# remove this file — point EAOS_DB__URL in configmap.yaml at the external host.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: eaos-postgres
+  namespace: eaos
+spec:
+  serviceName: eaos-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eaos-postgres
+  template:
+    metadata:
+      labels:
+        app: eaos-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: eaos
+            - name: POSTGRES_USER
+              value: eaos
+            - name: POSTGRES_PASSWORD
+              value: eaos
+          volumeMounts:
+            - name: pg-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "eaos", "-d", "eaos"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1Gi }
+  volumeClaimTemplates:
+    - metadata:
+        name: pg-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eaos-postgres
+  namespace: eaos
+spec:
+  selector:
+    app: eaos-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

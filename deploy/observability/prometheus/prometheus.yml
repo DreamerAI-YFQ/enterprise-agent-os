@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Collector self-telemetry: otelcol_receiver_accepted_spans (span rate),
+  # otelcol_exporter_sent_spans, processor queue depth, etc.
+  - job_name: "otel-collector"
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  # OTLP metrics the collector receives from app components and re-exposes
+  # via its prometheus exporter on :8889. Populates once the API/worker emit
+  # OTLP metrics (counters/histograms) in addition to traces.
+  - job_name: "otel-collector-app-metrics"
+    static_configs:
+      - targets: ["otel-collector:8889"]

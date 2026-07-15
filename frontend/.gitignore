@@ -1,0 +1,28 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+*.log
+.vite
+coverage
+.turbo
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Generated API types
+shared/src/api/generated/*
+!shared/src/api/generated/.gitkeep

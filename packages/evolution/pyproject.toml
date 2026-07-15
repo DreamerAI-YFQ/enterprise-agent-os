@@ -1,0 +1,27 @@
+[project]
+name = "eaos-evolution"
+version = "0.1.0"
+description = "EAOS evolution loop: implicit feedback, preference dataset, DPO, guardrail, shadow"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "eaos-core",
+    "eaos-infra",
+    "eaos-agent",
+    "eaos-observability",
+    "eaos-harness",
+    "trl>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eaos"]
+
+[tool.uv.sources]
+eaos-core = { workspace = true }
+eaos-infra = { workspace = true }
+eaos-agent = { workspace = true }
+eaos-observability = { workspace = true }
+eaos-harness = { workspace = true }

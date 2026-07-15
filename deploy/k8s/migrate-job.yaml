@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eaos-migrate
+  namespace: eaos
+  labels:
+    app: eaos-migrate
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: eaos-api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uv", "run", "alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: eaos-config
+            - secretRef:
+                name: eaos-secret

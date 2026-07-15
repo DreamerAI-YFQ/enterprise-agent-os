@@ -1,0 +1,38 @@
+/*
+ * EAOS Dark Mode Token Overrides
+ *
+ * Dark mode is fully controlled by JS via the .dark class and
+ * data-theme="dark" attribute on <html>. This avoids conflicts
+ * with the prefers-color-scheme media query when the user has
+ * explicitly chosen a theme (light/dark) rather than "system".
+ *
+ * For "system" mode, initTheme() reads matchMedia and applies
+ * the appropriate class; watchSystemTheme() reacts to changes.
+ */
+
+.dark,
+[data-theme="dark"] {
+  --color-bg-base: #000000;
+  --color-bg-elevated: #1c1c1e;
+  --color-bg-subtle: #2c2c2e;
+  --color-bg-muted: #3a3a3c;
+
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #aeaeb2;
+  --color-text-tertiary: #636366;
+
+  --color-accent-subtle: #0a2d52;
+  --color-success-subtle: #0e3a1c;
+  --color-warning-subtle: #3a2400;
+  --color-danger-subtle: #3a0d0a;
+  --color-info-subtle: #0a2f3a;
+
+  --color-border: #38383a;
+  --color-border-strong: #545458;
+  --color-border-subtle: #2c2c2e;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-focus: 0 0 0 4px rgba(0, 113, 227, 0.32);
+}

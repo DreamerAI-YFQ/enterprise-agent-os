@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install uv (single static binary, no Python needed).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy workspace manifests first for better layer caching.
+COPY pyproject.toml uv.lock ./
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY alembic.ini ./
+
+# Install all workspace packages (mock_saas needs fastapi/uvicorn/mcp from its own deps).
+RUN uv sync --all-packages --no-dev
+
+EXPOSE 18000
+
+HEALTHCHECK --interval=15s --timeout=5s --retries=5 \
+    CMD uv run python -c "import urllib.request; urllib.request.urlopen('http://localhost:18000/health')" || exit 1
+
+CMD ["uv", "run", "uvicorn", "mock_saas.main:app", "--host", "0.0.0.0", "--port", "18000"]

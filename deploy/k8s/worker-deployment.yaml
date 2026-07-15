@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eaos-worker
+  namespace: eaos
+  labels:
+    app: eaos-worker
+spec:
+  # Single replica: the evolution worker drives DPO training and pipeline
+  # advancement. Leader election is out of scope for Phase 6; use a real
+  # work-queue (Redis Streams / Celery) before scaling beyond 1.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eaos-worker
+  template:
+    metadata:
+      labels:
+        app: eaos-worker
+    spec:
+      containers:
+        - name: worker
+          image: eaos-worker:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: eaos-config
+            - secretRef:
+                name: eaos-secret
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1Gi }

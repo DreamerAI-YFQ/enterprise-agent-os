@@ -1,0 +1,13 @@
+packages:
+  - "shared"
+  - "employee"
+  - "admin"
+  - "desktop-employee"
+  - "desktop-admin"
+  - "e2e"
+
+allowBuilds:
+  esbuild: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild

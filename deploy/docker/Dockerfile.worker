@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install uv (single static binary, no Python needed).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy workspace manifests first for better layer caching.
+COPY pyproject.toml uv.lock ./
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY alembic.ini ./
+
+# Install all workspace packages (no dev deps for slimmer image).
+RUN uv sync --all-packages --no-dev
+
+# Evolution worker: polls harness.evolution_strategies and advances the
+# six-step governance pipeline (training -> shadow -> canary).
+CMD ["uv", "run", "python", "-m", "eaos_worker"]

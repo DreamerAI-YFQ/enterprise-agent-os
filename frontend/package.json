@@ -1,0 +1,31 @@
+{
+  "name": "eaos-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter employee dev",
+    "dev:admin": "pnpm --filter admin dev",
+    "dev:all": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "build:employee": "pnpm --filter employee build",
+    "build:admin": "pnpm --filter admin build",
+    "preview": "pnpm --filter employee preview",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "api:gen": "pnpm --filter @eaos/api gen",
+    "api:check": "pnpm --filter @eaos/api check",
+    "dev:desktop": "pnpm --filter desktop-employee dev",
+    "dev:desktop:admin": "pnpm --filter desktop-admin dev",
+    "build:desktop": "pnpm --filter desktop-employee build",
+    "build:desktop:admin": "pnpm --filter desktop-admin build"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@eaos/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'Playwright E2E tests will be added in F2' && exit 0"
+  }
+}

@@ -1,0 +1,29 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: eaos-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  # Direct Postgres access for business metrics that live in trace.spans
+  # and harness.evolution_strategies (span latency, cost, skill adoption,
+  # evolution stage distribution). The app writes these via PgTraceQuery
+  # rather than emitting OTLP gauges, so Grafana queries Postgres directly.
+  - name: Postgres
+    uid: eaos-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: eaos
+    user: eaos
+    secureJsonData:
+      password: eaos
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: false

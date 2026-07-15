@@ -1,0 +1,51 @@
+{
+  "name": "@eaos/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api/index.ts",
+    "./api/client": "./src/api/client.ts",
+    "./design/tokens.css": "./src/design/tokens.css",
+    "./design/tokens-dark.css": "./src/design/tokens-dark.css",
+    "./lib/utils": "./src/lib/utils.ts",
+    "./components/*": "./src/components/*.tsx",
+    "./types": "./src/types/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "gen": "openapi-typescript ../openapi.json -o src/api/generated/openapi.d.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.4",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@radix-ui/react-toast": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "i18next": "^26.3.6",
+    "lucide-react": "^0.469.0",
+    "openapi-fetch": "^0.13.4",
+    "react-i18next": "^17.0.9",
+    "tailwind-merge": "^2.6.0",
+    "zustand": "^5.0.2"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5.62.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "openapi-typescript": "^7.5.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.1.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3"
+  }
+}

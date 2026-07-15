@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eaos-config
+  namespace: eaos
+data:
+  EAOS_DEBUG: "false"
+  EAOS_DB__URL: "postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos"
+  EAOS_REDIS__URL: "redis://eaos-redis:6379/0"
+  EAOS_OTEL__ENDPOINT: "http://eaos-otel-collector:4317"
+  EAOS_OTEL__SERVICE_NAME: "eaos-api"
+  EAOS_LLM__DEFAULT_MODEL: "gpt-4o-mini"
+  EAOS_MODEL_ARTIFACT_DIR: "/tmp/eaos/models"

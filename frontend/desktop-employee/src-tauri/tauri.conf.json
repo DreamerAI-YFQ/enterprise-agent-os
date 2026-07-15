@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EAOS Employee",
+  "version": "0.1.0",
+  "identifier": "com.eaos.employee",
+  "build": {
+    "beforeDevCommand": "pnpm --filter employee dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm --filter employee build",
+    "frontendDist": "../../employee/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "EAOS Employee",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 768,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 https://*; img-src 'self' data: blob: https://*; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

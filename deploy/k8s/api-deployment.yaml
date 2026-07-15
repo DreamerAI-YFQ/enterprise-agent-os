@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eaos-api
+  namespace: eaos
+  labels:
+    app: eaos-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: eaos-api
+  template:
+    metadata:
+      labels:
+        app: eaos-api
+    spec:
+      containers:
+        - name: api
+          image: eaos-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: eaos-config
+            - secretRef:
+                name: eaos-secret
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eaos-api
+  namespace: eaos
+spec:
+  selector:
+    app: eaos-api
+  ports:
+    - port: 80
+      targetPort: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eaos-api
+  namespace: eaos
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: eaos.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eaos-api
+                port:
+                  number: 80

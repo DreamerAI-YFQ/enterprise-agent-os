@@ -1,0 +1,36 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: basic
+  # Exposes received OTLP metrics on :8889 for Prometheus to scrape.
+  # App components emitting OTLP metrics (counter/histogram) flow through here.
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    send_timestamps: true
+    metric_expiration: 5m
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  # Collector self-telemetry (otelcol_* metrics) on :8888.
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [jaeger, debug]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]

@@ -1,0 +1,19 @@
+[project]
+name = "eaos-cli"
+version = "0.1.0"
+description = "EAOS management CLI — migrate, seed, serve, worker, admin, evolution"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+eaos = "eaos_cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eaos_cli"]

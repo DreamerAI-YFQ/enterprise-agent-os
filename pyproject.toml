@@ -1,0 +1,87 @@
+[project]
+name = "enterprise-agent-os"
+version = "0.1.0"
+description = "Enterprise Agent OS - Platform-level Agent governance system"
+requires-python = ">=3.11,<3.12"
+
+[tool.uv.workspace]
+members = [
+    "packages/core",
+    "packages/infra",
+    "packages/data",
+    "packages/knowledge",
+    "packages/skills",
+    "packages/agent",
+    "packages/gateway",
+    "packages/observability",
+    "packages/harness",
+    "packages/evolution",
+    "apps/eaos_api",
+    "apps/eaos_worker",
+    "apps/eaos_cli",
+    "apps/mock_saas",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "packages/infra/src/eaos/infra/db/migrations/",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "TCH"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends()/Query()/Body() in argument defaults is the idiomatic
+# pattern for route declarations — B008 false-positives on every route.
+"apps/mock_saas/src/mock_saas/**/*.py" = ["B008"]
+"apps/eaos_api/src/**/*.py" = ["B008"]
+# FastAPI resolves body/return type annotations at runtime via get_type_hints,
+# so model imports in route files cannot move under TYPE_CHECKING.
+"apps/mock_saas/src/mock_saas/routes/*" = ["TC001", "TC002", "TC003"]
+
+[tool.mypy]
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+namespace_packages = true
+explicit_package_bases = true
+exclude = [
+    "packages/infra/src/eaos/infra/db/migrations/",
+]
+mypy_path = [
+    "packages/core/src",
+    "packages/infra/src",
+    "packages/data/src",
+    "packages/knowledge/src",
+    "packages/skills/src",
+    "packages/agent/src",
+    "packages/gateway/src",
+    "packages/observability/src",
+    "packages/harness/src",
+    "packages/evolution/src",
+    "apps/eaos_api/src",
+    "apps/eaos_worker/src",
+    "apps/eaos_cli/src",
+    "apps/mock_saas/src",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["packages/*/tests", "apps/*/tests"]
+addopts = "--import-mode=importlib"
+markers = [
+    "integration: requires live PG/Redis/LLM services (skip unless EAOS_RUN_INTEGRATION=1)",
+    "llm: requires a real LLM API key (skip unless EAOS_RUN_LLM=1)",
+]

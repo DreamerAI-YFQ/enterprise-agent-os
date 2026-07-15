@@ -1,0 +1,23 @@
+[project]
+name = "eaos-data"
+version = "0.1.0"
+description = "EAOS L1 data access: MCP connectors, Text2SQL, SQL sandbox"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "eaos-core",
+    "eaos-infra",
+    "mcp>=1.0",
+    "httpx>=0.27",
+    "cryptography>=42.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eaos"]
+
+[tool.uv.sources]
+eaos-core = { workspace = true }
+eaos-infra = { workspace = true }

@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@eaos/shared": ["../shared/src"],
+      "@eaos/shared/*": ["../shared/src/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}
