@@ -1,0 +1,33 @@
+{
+  "demo_a": {
+    "demo": "A",
+    "steps": [
+      {
+        "step": 1,
+        "name": "contribute",
+        "status": "ok",
+        "contribution_id": "f1d59d1e-0bf2-4053-a076-a4c9cb037538"
+      },
+      {
+        "step": 2,
+        "name": "approve",
+        "status": "fail",
+        "error": "HTTP 404: {\"detail\":\"Not Found\"}"
+      }
+    ],
+    "passed": false
+  },
+  "demo_b": {
+    "demo": "B",
+    "steps": [
+      {
+        "step": 1,
+        "name": "request_order",
+        "agent_response": "",
+        "status": "fail",
+        "error": "HTTP 404: HTTP 404: {\"detail\":\"session not found\",\"code\":\"not_found\"}"
+      }
+    ],
+    "passed": false
+  }
+}

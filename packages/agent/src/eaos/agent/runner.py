@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 from eaos.agent.dispatcher import AgentConfig  # noqa: TC002  (langgraph get_type_hints)
 from eaos.core.context import TenantContext  # noqa: TC002  (langgraph get_type_hints)
 from eaos.core.errors import PermissionDeniedError
+from eaos.data.mcp.types import McpToolResult  # C07: for write tool error handling
 from eaos.infra.llm.base import Attachment, Message
 from eaos.knowledge.memory.store import Memory, MemoryScope
 from langgraph.checkpoint.memory import MemorySaver
@@ -146,6 +147,60 @@ def _should_force_mcp(user_message: str) -> bool:
     return any(kw in text for kw in _DATA_QUERY_KEYWORDS)
 
 
+# C13/Fix-B,C: Write-intent detection — any request that mutates business state
+# (create/update/delete orders, customers, inventory, etc.) MUST be routed
+# through the MCP write-tool path so the WritePipeline enforces permission
+# checks, idempotency, audit logging, and rollback. Without this, the LLM
+# planner may pick "direct" and hallucinate "已创建" without invoking the
+# write tool, bypassing all security controls.
+_WRITE_INTENT_KEYWORDS: list[str] = [
+    # Chinese write verbs
+    "创建", "新建", "新增", "添加", "增加",
+    "下单", "提交", "确认", "批准", "审批",
+    "修改", "更新", "编辑", "变更", "调整",
+    "删除", "移除", "撤销", "取消", "作废",
+    "入库", "出库", "发货", "退货", "结算",
+    # English write verbs
+    "create", "insert", "add", "new",
+    "update", "modify", "edit", "change", "adjust", "set",
+    "delete", "remove", "drop", "cancel", "revoke",
+    "submit", "confirm", "approve", "place order", "ship",
+]
+
+# Read-only query verbs that may co-occur with write nouns but do NOT
+# indicate write intent by themselves (e.g. "查询如何创建订单" is a question,
+# not a write request). These are used to avoid false positives.
+_READ_CONTEXT_KEYWORDS: list[str] = [
+    "如何", "怎么", "怎样", "能否", "可以吗", "吗", "是否",
+    "什么", "哪些", "区别", "说明", "文档", "手册",
+    "查询", "查看", "显示", "列出", "获取",
+    "how to", "what is", "what are", "explain", "describe",
+]
+
+
+def _detect_write_intent(user_message: str) -> bool:
+    """Detect whether the user is requesting a WRITE/mutation operation.
+
+    Returns True only when a write verb is present AND the message is not a
+    read-only question about how to perform a write (e.g. "如何创建订单" is a
+    documentation question, not a write request).
+
+    This is the safety gate that forces write requests through the MCP
+    write-tool path (WritePipeline) instead of letting the LLM answer
+    "directly" and hallucinate success.
+    """
+    text = user_message.lower()
+    has_write_verb = any(kw in text for kw in _WRITE_INTENT_KEYWORDS)
+    if not has_write_verb:
+        return False
+    # If the message is clearly a read-only question (e.g. "如何创建订单？"
+    # "创建订单的流程是什么？"), do NOT treat it as a write request.
+    has_read_context = any(kw in text for kw in _READ_CONTEXT_KEYWORDS)
+    if has_read_context:
+        return False
+    return True
+
+
 def _build_skill_catalog(skills: list[Any]) -> str:
     """Build a skill catalog text block for LLM prompt injection."""
     if not skills:
@@ -173,12 +228,23 @@ _PLAN_SYSTEM_PROMPT = (
     "Steps should have one item with action rag|skill|mcp|direct.\n"
     "- \"plan\": complex multi-step tasks with dependencies. Steps is a list of "
     "{id, action, args}.\n"
-    'Actions: "rag" (knowledge/docs), "mcp" (database/query tools), '
+    'Actions: "rag" (knowledge base / internal docs / policies / product manuals), '
+    '"mcp" (live database query AND write operations from ERP/CRM tables), '
     '"skill" (skill-based), "direct" (no tools).\n'
-    "IMPORTANT: If the user asks to query data, list records, or find information "
-    "from a database/system (ERP, CRM, etc.), you MUST use action \"mcp\" — NEVER "
-    "use \"direct\" for data queries. Only use \"direct\" for greetings, small talk, "
-    "or questions that clearly require no external data."
+    "IMPORTANT routing rules:\n"
+    "- If the user asks about product specs, customer info, order details, inventory, "
+    "or any factual data that lives in ERP/CRM DATABASE TABLES, use \"mcp\".\n"
+    "- If the user asks about policies, procedures, documentation, knowledge articles, "
+    'product manuals, or anything documented in the KNOWLEDGE BASE, use "rag".\n'
+    '- If unsure whether info is in DB or knowledge base, try "rag" first.\n'
+    "- Only use \"direct\" for greetings, small talk, or questions that clearly "
+    "require no external data.\n"
+    "WRITE OPERATION RULE (CRITICAL):\n"
+    '- If the user requests ANY write/mutation operation (create/update/delete/cancel '
+    'an order, customer, product, inventory, etc.), you MUST use "mcp" action so the '
+    'request goes through the write tool pipeline (permission check + idempotency + '
+    'audit). NEVER use "direct" for write operations — answering "已创建" without '
+    'calling the write tool is FORBIDDEN and bypasses all security controls.'
 )
 
 _REACT_SYSTEM_PROMPT = (
@@ -188,13 +254,19 @@ _REACT_SYSTEM_PROMPT = (
     '"args": {}, "thought": "brief reasoning"}\n'
     '- "done": task complete, set args.answer to the final answer\n'
     '- "rag": query knowledge base, set args.query\n'
-    '- "mcp": query database/ERP/CRM via registered tools. You may leave '
+    '- "mcp": query database/ERP/CRM via registered tools, OR perform write operations '
+    '(create/update/delete orders, customers, etc.). You may leave '
     'args.tool_name empty; the system will select the best tool from the catalog. '
     'Optionally set args.tool_args with resource/filters if you know them.\n'
     '- "skill": execute a skill, set args.skill_name\n'
     '- "direct": answer directly without tools, ONLY for greetings/small talk\n'
     "IMPORTANT: For any data/query request (ERP products, CRM customers, records, "
-    "lists), you MUST choose \"mcp\". Do not answer from your own knowledge."
+    "lists), you MUST choose \"mcp\". Do not answer from your own knowledge.\n"
+    "WRITE OPERATION RULE (CRITICAL): For any write/mutation request (create/update/"
+    "delete/cancel), you MUST choose \"mcp\". NEVER answer \"已创建\" or \"已删除\" "
+    "directly — the write MUST go through the MCP write tool so permission, "
+    "idempotency, and audit are enforced. Choosing \"direct\" or \"done\" for a "
+    "write request is FORBIDDEN."
 )
 
 _REFLECT_SYSTEM_PROMPT = (
@@ -214,6 +286,12 @@ _TOOL_SELECTION_PROMPT = (
     "- Use *_list_resources ONLY when the user asks 'what tables/resources exist' "
     "or when you don't know the resource name.\n"
     "- For *_read, leave filters empty unless the user asked for specific criteria.\n"
+    "- If the user asks to CREATE/UPDATE/DELETE/CANCEL an order, customer, "
+    "product, or inventory item (a WRITE operation), you MUST select the "
+    "matching *_create / *_update / *_delete write tool from the catalog and "
+    "fill in the arguments from the user's message (customer_code, product_sku, "
+    "quantity, unit_price, etc.). NEVER return an empty tool_name for a write "
+    "request — if a write tool exists, select it.\n"
     'Respond with JSON: {{"tool_name": "...", "arguments": {{...}}}}\n'
     'If no tool is suitable, respond with {{"tool_name": "", "arguments": {{}}}}'
 )
@@ -244,6 +322,7 @@ class LangGraphRunnerImpl:
         dispatcher: AgentDispatcher,
         checkpointer: Any = None,
         tool_registry: ToolRegistry | None = None,
+        db: Any = None,
     ) -> None:
         self._llm = llm
         self._skill_resolver = skill_resolver
@@ -255,6 +334,7 @@ class LangGraphRunnerImpl:
         self._dispatcher = dispatcher
         self._checkpointer: Any = checkpointer if checkpointer is not None else MemorySaver()
         self._tool_registry = tool_registry
+        self._db = db
         self._graph = self._build_graph()
 
     # -- Graph construction ------------------------------------------------
@@ -420,6 +500,33 @@ class LangGraphRunnerImpl:
             llm_messages, task_type="plan", temperature=0.1
         )
         action, args = self._parse_react(response.content)
+
+        # C13/Fix-B,C: SAFETY OVERRIDE — if the user message has write intent
+        # and the LLM tried to answer directly (action=direct/done) WITHOUT
+        # having invoked a write tool yet, force "mcp" so the WritePipeline
+        # is invoked. This only triggers on the FIRST reason iteration (before
+        # any write tool has run); once a write tool outcome is in tool_results,
+        # the LLM is allowed to declare "done" and summarize the result.
+        # Without this, the LLM would hallucinate "已创建" without calling the
+        # write tool, bypassing all security controls.
+        user_message = state.get("user_message", "")
+        if (
+            _detect_write_intent(user_message)
+            and action in ("direct", "done")
+        ):
+            tool_results = state.get("tool_results", [])
+            write_already_called = any(
+                tr.get("type") == "mcp"
+                and (
+                    tr.get("tool_name", "").startswith("erp_")
+                    or tr.get("tool_name", "").startswith("crm_")
+                    or tr.get("is_write")
+                )
+                for tr in tool_results
+            )
+            if not write_already_called:
+                action = "mcp"
+                args = {}
         if action == "done":
             return {
                 "final_output": args.get("answer", ""),
@@ -502,15 +609,34 @@ class LangGraphRunnerImpl:
 
         results = await self._knowledge_engine.search(query, ctx.tenant_id, user_id=ctx.user_id)
         tool_results = list(state.get("tool_results", []))
-        tool_results.append(
-            {
-                "type": "rag",
-                "query": query,
-                "results": [
-                    {"content": r.content, "score": r.score} for r in results
-                ],
-            }
-        )
+
+        # C05/GAP-13: Include citation metadata and no_evidence flag
+        if results:
+            tool_results.append(
+                {
+                    "type": "rag",
+                    "query": query,
+                    "has_evidence": True,
+                    "results": [
+                        {
+                            "content": r.content,
+                            "score": r.score,
+                            "metadata": r.metadata,  # C05: citation source info
+                        }
+                        for r in results
+                    ],
+                }
+            )
+        else:
+            # C05/GAP-13: No evidence found — flag for refusal in _direct_node
+            tool_results.append(
+                {
+                    "type": "rag",
+                    "query": query,
+                    "has_evidence": False,
+                    "results": [],
+                }
+            )
         return {"tool_results": tool_results}
 
     async def _mcp_node(self, state: _AgentState) -> dict[str, Any]:
@@ -597,13 +723,40 @@ class LangGraphRunnerImpl:
             if resource:
                 tool_args["resource"] = resource
 
-        result = await registry.call_tool(
-            tool_name, tool_args, ctx.tenant_id
-        )
+        # C07: Route write tools through governed WritePipeline
+        if registry.is_write_tool(tool_name):
+            from uuid import uuid4
+
+            from eaos.core.execution import ToolExecutionContext
+
+            exec_ctx = ToolExecutionContext(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                agent_id=ctx.agent_id,
+                session_id=ctx.session_id or uuid4(),
+                agent_scope=ctx.agent_scope,
+                department_ids=list(ctx.department_ids),
+                trace_id=uuid4(),
+            )
+            exec_ctx.fail_closed(is_write=True)
+            try:
+                result = await registry.call_write_tool(tool_name, tool_args, exec_ctx)
+            except Exception as exc:
+                # WriteApprovalRequired or other write pipeline error
+                result = McpToolResult(
+                    content=[{"type": "text", "text": str(exc)}],
+                    is_error=True,
+                    error_message=str(exc),
+                )
+        else:
+            result = await registry.call_tool(
+                tool_name, tool_args, ctx.tenant_id
+            )
         tool_results.append(
             {
                 "type": "mcp",
                 "tool_name": tool_name,
+                "is_write": registry.is_write_tool(tool_name),
                 "result": {
                     "content": result.content,
                     "is_error": result.is_error,
@@ -696,6 +849,33 @@ class LangGraphRunnerImpl:
         messages = state.get("messages", [])
         tool_results = state.get("tool_results", [])
 
+        # C13/Fix-B,C: SAFETY NET — if the user message has write intent but
+        # no write tool was actually invoked (tool_results is empty or lacks
+        # a write-tool outcome), REFUSE to answer directly. This prevents the
+        # LLM from hallucinating "已创建/已删除" without going through the
+        # WritePipeline (which enforces permission/idempotency/audit).
+        # The _parse_plan / _parse_react overrides should already route write
+        # requests to mcp_node; this is the last-resort backstop.
+        user_message = state.get("user_message", "")
+        if _detect_write_intent(user_message):
+            has_write_outcome = any(
+                tr.get("type") == "mcp"
+                and (
+                    tr.get("tool_name", "").startswith("erp_")
+                    or tr.get("tool_name", "").startswith("crm_")
+                    or tr.get("is_write")
+                )
+                for tr in tool_results
+            )
+            if not has_write_outcome:
+                return {
+                    "final_output": (
+                        "该操作需要通过企业写操作工具执行（涉及权限校验、幂等性检查和审计日志）。"
+                        "请通过标准下单/创建流程提交，系统将自动完成权限审批与操作审计。"
+                        "直接由助手生成“已创建”等回复不被允许，因为这会绕过安全管控。"
+                    )
+                }
+
         # If the last tool result is a structured read, render it as a Markdown
         # table directly instead of asking the LLM to summarize (which often
         # copies raw JSON).
@@ -712,7 +892,40 @@ class LangGraphRunnerImpl:
             "Markdown table. Do NOT return raw JSON. Do NOT make up information "
             "not present in the observations."
         )
-        if tool_results:
+
+        # C05/GAP-13: Citation and no-evidence refusal
+        rag_evidence = ""
+        has_rag = False
+        rag_has_evidence = True
+        for tr in tool_results:
+            if tr.get("type") == "rag":
+                has_rag = True
+                if not tr.get("has_evidence", True):
+                    rag_has_evidence = False
+                else:
+                    for i, r in enumerate(tr.get("results", []), 1):
+                        meta = r.get("metadata", {})
+                        source_info = ""
+                        if meta.get("document_id"):
+                            source_info = f" (来源: 文档{meta.get('document_id', '')})"
+                        elif meta.get("scope"):
+                            source_info = f" (来源: {meta.get('scope')})"
+                        rag_evidence += f"[{i}] {r.get('content', '')[:500]}{source_info}\n"
+
+        if has_rag:
+            if rag_has_evidence and rag_evidence:
+                system_prompt += (
+                    "\n\n以下是从企业知识库检索到的证据。请基于这些证据回答，"
+                    "并在回答末尾标注引用来源编号（如 [1]、[2]）。"
+                    "不要添加证据中没有的信息。\n\n"
+                    + rag_evidence
+                )
+            else:
+                system_prompt += (
+                    "\n\n知识库中未找到相关证据。请礼貌地告知用户"
+                    "没有找到相关信息，不要编造答案。"
+                )
+        elif tool_results:
             system_prompt += (
                 " The latest observation contains the tool result; use it as the "
                 "primary source for your answer."
@@ -856,18 +1069,42 @@ class LangGraphRunnerImpl:
             )
             return
 
+        # C03: Load conversation history so the LLM has context from
+        # previous turns in this session. Without this, each invoke() starts
+        # with only the current message, making multi-turn conversations
+        # impossible (especially pronoun/ellipsis resolution).
+        history_messages: list[dict[str, Any]] = []
+        if self._db is not None and ctx.session_id is not None:
+            try:
+                rows = await self._db.fetch(
+                    "SELECT role, content FROM agent.messages "
+                    "WHERE session_id = :p0 AND tenant_id = :p1 "
+                    "AND role IN ('user', 'assistant') "
+                    "AND event_type IS NULL OR event_type = 'final' "
+                    "ORDER BY created_at ASC LIMIT 20",
+                    ctx.session_id,
+                    ctx.tenant_id,
+                )
+                history_messages = [
+                    {"role": r["role"], "content": r["content"]} for r in rows
+                ] if rows else []
+            except Exception:  # noqa: BLE001 — history is best-effort
+                logger.warning("failed to load history", exc_info=True)
+
         config: dict[str, Any] = {
             "configurable": {"thread_id": thread_id}
         }
         user_msg: dict[str, Any] = {"role": "user", "content": user_message}
         if attachments:
             user_msg["attachments"] = attachments
+        # Prepend history to messages so the graph has full conversation context
+        all_messages = history_messages + [user_msg]
         initial_state: _AgentState = {
             "ctx": ctx,
             "user_message": user_message,
             "agent_config": agent_config,
             "thread_id": thread_id,
-            "messages": [user_msg],
+            "messages": all_messages,
             "paradigm": "plan",
             "plan_steps": [],
             "current_step": 0,
@@ -1021,9 +1258,23 @@ class LangGraphRunnerImpl:
             paradigm = "plan"
             steps = []
 
-        # Force data-query requests through MCP regardless of LLM plan output.
-        if _should_force_mcp(user_message):
-            return "react", [{"id": 0, "action": "mcp", "args": {}}]
+        # Let the LLM planner decide between rag/mcp/direct based on the
+        # query intent. The force_mcp override was too aggressive — it sent
+        # all product/customer/order queries to MCP, preventing RAG retrieval
+        # for knowledge-base questions about those same entities.
+        # The planner prompt already instructs: rag=knowledge/docs,
+        # mcp=database/query tools, direct=greetings only.
+
+        # C13/Fix-B,C: SAFETY OVERRIDE — if the user message has write intent
+        # (create/update/delete an order/customer/etc.), FORCE the plan to use
+        # "mcp" so the request goes through the WritePipeline (permission check
+        # + idempotency + audit + rollback). This is non-negotiable: the LLM
+        # planner must never pick "direct" for a write operation, because that
+        # would let it hallucinate "已创建" without invoking the write tool,
+        # bypassing all security controls. See _detect_write_intent().
+        if _detect_write_intent(user_message):
+            forced_steps = [{"id": 0, "action": "mcp", "args": {}}]
+            return "react", forced_steps
 
         if paradigm == "react":
             return paradigm, steps

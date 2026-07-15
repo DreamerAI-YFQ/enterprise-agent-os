@@ -1,0 +1,48 @@
+# Evaluation configuration v1
+# 冻结后不得修改；Pilot后仅允许调整一次非安全性能/成本阈值
+
+version: "v1"
+frozen_date: "pending"
+
+# ----- 环境 -----
+environment:
+  llm_provider: "dashscope"
+  llm_model: "qwen3-omni-flash"
+  embedding_provider: "dashscope"
+  embedding_model: "text-embedding-v3"
+  embedding_dimensions: 1024
+  db: "PostgreSQL 16 + pgvector"
+  reranker: "llm"  # LLM-based reranker
+
+# ----- 数据集划分 -----
+splits:
+  dev: 0.60
+  validation: 0.20
+  test: 0.20
+  test_gold_locked: false  # 正式运行前锁定
+
+# ----- 重复次数 -----
+repetitions:
+  rag_questions: 3
+  order_tasks: 1
+  safety_attacks: 1  # 安全攻击不需要重复
+
+# ----- 超时 -----
+timeouts:
+  rag_total_s: 30
+  order_to_approval_s: 20
+  approval_to_complete_s: 15
+  api_first_token_s: 3
+
+# ----- 并发 -----
+concurrency:
+  max_parallel: 1  # 正式运行串行，避免干扰
+  warmup_runs: 10
+
+# ----- 统计 -----
+statistics:
+  ci_level: 0.95
+  bootstrap_iterations: 10000
+  min_sample_size:
+    proportion: 30
+    continuous: 10

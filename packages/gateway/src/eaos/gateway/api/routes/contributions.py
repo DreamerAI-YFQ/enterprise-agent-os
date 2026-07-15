@@ -415,23 +415,37 @@ async def review_contribution(
     title = row["title"]
 
     if body.decision == "approved":
-        # Ingest content into the indexed knowledge.documents table.
-        # Done first so a failure leaves the contribution in 'pending'.
-        contrib_metadata = row.get("metadata") or {}
-        if not isinstance(contrib_metadata, dict):
-            contrib_metadata = {}
-        doc_metadata = {
-            **contrib_metadata,
-            "contribution_id": str(row["id"]),
-        }
-        doc = Document(
-            source_type=row["source_type"],
-            source_uri=row.get("source_uri") or f"contribution://{row['id']}",
-            title=title,
-            content=row["content"],
-            metadata=doc_metadata,
+        # C04/GAP-09: Idempotent ingest — check if a document already exists
+        # for this contribution. If ingest succeeded before but the status
+        # UPDATE failed, the contribution is still 'pending' but the document
+        # is already in the knowledge base. Re-ingesting would create duplicates.
+        existing_doc = await db.fetch_one(
+            "SELECT id FROM knowledge.documents "
+            "WHERE tenant_id = :p0 "
+            "AND metadata->>'contribution_id' = :p1",
+            principal.tenant_id,
+            str(row["id"]),
         )
-        await rag.ingest(doc, principal.tenant_id)
+
+        if existing_doc is None:
+            # Ingest content into the indexed knowledge.documents table.
+            # Done first so a failure leaves the contribution in 'pending'.
+            contrib_metadata = row.get("metadata") or {}
+            if not isinstance(contrib_metadata, dict):
+                contrib_metadata = {}
+            doc_metadata = {
+                **contrib_metadata,
+                "contribution_id": str(row["id"]),
+            }
+            doc = Document(
+                source_type=row["source_type"],
+                source_uri=row.get("source_uri") or f"contribution://{row['id']}",
+                title=title,
+                content=row["content"],
+                metadata=doc_metadata,
+            )
+            await rag.ingest(doc, principal.tenant_id)
+        # else: document already ingested from a previous attempt — skip ingest
 
         await db.execute(
             "UPDATE knowledge.contributions "

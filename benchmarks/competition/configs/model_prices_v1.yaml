@@ -1,0 +1,30 @@
+# Model pricing v1
+# 用于成本复算；正式运行后冻结
+# 价格单位：USD / 1K tokens
+
+version: "v1"
+frozen_date: "pending"
+currency: "USD"
+fx_rate_usd_to_cny: 7.2  # 冻结汇率
+
+models:
+  # DashScope (阿里云百炼)
+  qwen3-omni-flash:
+    provider: "dashscope"
+    input_price_per_1k: 0.0003
+    output_price_per_1k: 0.0009
+    notes: "qwen3-omni-flash 统一价格"
+
+  text-embedding-v3:
+    provider: "dashscope"
+    input_price_per_1k: 0.00007
+    output_price_per_1k: 0
+    notes: "1024维度"
+
+# ----- 预算 -----
+budgets:
+  rag_p95_total_token: 12000
+  rag_p95_cost_usd: 0.03
+  order_p95_total_token: 10000
+  order_p95_cost_usd: 0.02
+  max_cost_per_success_vs_baseline: 1.25

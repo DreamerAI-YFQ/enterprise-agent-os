@@ -1,0 +1,90 @@
+# Baselines and ablations v1
+# 每个基线保持语料、查询、模型、Top-K、温度和重复次数一致
+
+version: "v1"
+
+# ----- RAG 基线 -----
+rag_baselines:
+  B0_llm_only:
+    description: "LLM-only，不给企业知识库"
+    retrieval: none
+    rerank: false
+    permission_filter: none
+
+  B1_vector_only:
+    description: "只用量向检索"
+    retrieval: vector
+    rerank: false
+    permission_filter: post  # Top-K后过滤（基线行为）
+
+  B2_hybrid_no_rerank:
+    description: "向量+词法匹配(ILIKE)+RRF，不重排"
+    retrieval: hybrid
+    rerank: false
+    permission_filter: post
+
+  B3_hybrid_rerank:
+    description: "B2+LLM Reranker"
+    retrieval: hybrid
+    rerank: true
+    permission_filter: post
+
+  B4_full:
+    description: "查询改写+权限前置+混合检索+重排+引用/拒答"
+    retrieval: hybrid
+    rerank: true
+    permission_filter: pre  # 权限前置到查询阶段
+    query_rewrite: true
+    citation: true
+    no_answer_refusal: true
+
+# ----- 订单基线 -----
+order_baselines:
+  O0_text_only:
+    description: "LLM只生成操作建议，不执行"
+    execute: false
+
+  O1_rule_router:
+    description: "关键词/规则路由+领域服务"
+    execute: true
+    harness: false
+    routing: rule
+
+  O2_agent_no_harness:
+    description: "Agent+Connector，不启用治理（隔离数据库）"
+    execute: true
+    harness: false
+    routing: llm
+
+  O3_full:
+    description: "单Agent+Harness+HITL+幂等+审计+补偿回滚"
+    execute: true
+    harness: true
+    routing: llm
+    hitl: true
+    idempotent: true
+    audit: true
+    rollback: true
+
+  O4_multi_agent:
+    description: "C12晋级后加入"
+    execute: true
+    harness: true
+    routing: llm
+    collaboration: fan_out_in
+    condition: "C12 Go decision"
+
+# ----- 收益门 -----
+innovation_gates:
+  rag:
+    b4_vs_b0_accuracy: ">=20pp"
+    b4_vs_b1_ndcg5: ">=0.05"
+    b4_vs_b1_recall5: ">=5pp"
+  order:
+    o3_vs_o2_legal_completion_drop: "<=5pp"
+    o3_unauthorized_side_effects: "0"
+  multi_agent:
+    completion_rate_gain: ">=8pp"
+    quality_score_gain: ">=0.3/5"
+    cost_overhead: "<=2x"
+    ci_lower_bound: ">0"

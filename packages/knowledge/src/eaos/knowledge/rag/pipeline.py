@@ -40,6 +40,7 @@ class Chunk:
     token_count: int
     embedding: list[float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)  # parent chunk, page, type
+    score: float = 0.0  # C05: retrieval score (RRF or vector similarity)
 
 
 class Chunker(Protocol):
@@ -171,24 +172,48 @@ class RAGPipelineImpl:
         tenant_id: UUID,
         top_k: int = 5,
         scope_filter: dict[str, Any] | None = None,
+        *,
+        user_id: UUID | None = None,
+        department_ids: list[UUID] | None = None,
     ) -> list[Chunk]:
-        # When scope_filter is provided, pass it to the retriever so vector
-        # search narrows by scope/owner_id. The HybridRetriever forwards the
-        # filter dict to PgVectorStore.search.
-        if scope_filter and hasattr(self._retriever, "retrieve"):
-            try:
-                candidates = await self._retriever.retrieve(  # type: ignore[call-arg]
-                    query,
-                    tenant_id,
-                    top_k=top_k * 2,
-                    filter=scope_filter,
-                )
-            except TypeError:
-                # Retriever doesn't accept filter param — fall back to unfiltered
-                candidates = await self._retriever.retrieve(query, tenant_id, top_k=top_k * 2)
-        else:
+        """Retrieve relevant chunks: hybrid search -> rerank.
+
+        C05: When user_id is provided, permission filtering is applied
+        at the retriever level (pre-fetch), not post-filter.
+        """
+        try:
+            candidates = await self._retriever.retrieve(  # type: ignore[call-arg]
+                query,
+                tenant_id,
+                top_k=top_k * 2,
+                user_id=user_id,
+                department_ids=department_ids,
+            )
+        except TypeError:
+            # Retriever doesn't accept user_id/department_ids — fall back
             candidates = await self._retriever.retrieve(query, tenant_id, top_k=top_k * 2)
-        return await self._reranker.rerank(query, candidates, top_k=top_k)
+
+        # C05: Preserve chunk scores through reranking
+        reranked = await self._reranker.rerank(query, candidates, top_k=top_k)
+        # If reranker didn't preserve scores, restore from candidates
+        if reranked and not hasattr(reranked[0], "score"):
+            return reranked
+        score_map = {c.id: c.score for c in candidates if hasattr(c, "score")}
+        if score_map:
+            return [
+                Chunk(
+                    id=c.id,
+                    document_id=c.document_id,
+                    tenant_id=c.tenant_id,
+                    chunk_index=c.chunk_index,
+                    content=c.content,
+                    token_count=c.token_count,
+                    metadata=c.metadata,
+                    score=score_map.get(c.id, 0.0),
+                ) if hasattr(c, "score") and c.score == 0.0 else c
+                for c in reranked
+            ]
+        return reranked
 
     async def delete_document(self, document_id: UUID, tenant_id: UUID) -> None:
         await self._db.execute(

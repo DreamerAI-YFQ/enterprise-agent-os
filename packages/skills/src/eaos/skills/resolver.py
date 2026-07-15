@@ -54,10 +54,13 @@ class SkillResolverImpl:
         agent_id: UUID | None = None,
     ) -> list[SkillSpec]:
         del agent_id  # user-visible skills are independent of agent binding.
+        # C06/GAP-06: Include instructions, tools, tool_bindings columns
+        # so SkillSpec has complete execution metadata.
         rows = await self._db.tenant_scoped_fetch(
             "SELECT s.id, s.tenant_id, s.scope, s.owner_id, s.name, "
             "s.display_name, s.description, s.category, s.risk_level, "
-            "s.guardrail, s.status, s.version "
+            "s.guardrail, s.status, s.version, "
+            "s.instructions, s.tools, s.tool_bindings "
             "FROM skills.skills s "
             "WHERE s.status = 'published' AND ("
             "  (s.scope = 'personal' AND s.owner_id = :p0) OR "
@@ -76,10 +79,12 @@ class SkillResolverImpl:
         agent_id: UUID,
         tenant_id: UUID,
     ) -> list[SkillSpec]:
+        # C06/GAP-06: Include instructions, tools, tool_bindings columns
         rows = await self._db.tenant_scoped_fetch(
             "SELECT s.id, s.tenant_id, s.scope, s.owner_id, s.name, "
             "s.display_name, s.description, s.category, s.risk_level, "
-            "s.guardrail, s.status, s.version "
+            "s.guardrail, s.status, s.version, "
+            "s.instructions, s.tools, s.tool_bindings "
             "FROM skills.skills s "
             "JOIN agent.agent_skills a ON a.skill_id = s.id "
             "WHERE a.agent_id = :p0 AND a.enabled = TRUE "

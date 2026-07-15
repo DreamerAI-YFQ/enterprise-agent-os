@@ -106,28 +106,54 @@ class KnowledgeEngineImpl:
         top_k: int = 5,
         user_id: UUID | None = None,
     ) -> list[SearchResult]:
+        """C05: Permission-pre-filtered search with real RRF scores.
+
+        Permission filtering is now done at the retriever level (SQL WHERE),
+        not post-filter. This means invisible chunks never enter the candidate
+        pool, preventing both leakage and score distortion.
+
+        The score on SearchResult comes from the Chunk's RRF score, not a
+        hardcoded 1.0.
+        """
         rewritten = await self._rewriter.rewrite(query, tenant_id)
-        chunks = await self._rag.retrieve(rewritten.rewritten, tenant_id, top_k=top_k)
 
-        # When user_id is provided, post-filter chunks by three-tier scope visibility.
-        # Chunks visible to the user: enterprise (all) + personal (own) + department (own depts).
-        scope_map: dict[Any, tuple[str, Any]] = {}
-        if user_id is not None and self._db is not None and chunks:
-            scope_map = await self._query_chunk_scopes(chunks, tenant_id, user_id)
-            chunks = self._filter_visible_chunks(chunks, scope_map, user_id)
+        # C05: Load user's department IDs for permission-aware retrieval
+        department_ids: list[Any] = []
+        if user_id is not None and self._db is not None:
+            try:
+                dept_rows = await self._db.fetch(
+                    "SELECT department_id FROM iam.department_members "
+                    "WHERE user_id = :p0 AND tenant_id = :p1",
+                    user_id,
+                    tenant_id,
+                )
+                department_ids = [r["department_id"] for r in dept_rows] if dept_rows else []
+            except Exception:  # noqa: BLE001 — departments are best-effort
+                pass
 
+        # C05: Pass user_id and department_ids to retriever for permission-pre-filter
+        chunks = await self._rag.retrieve(
+            rewritten.rewritten,
+            tenant_id,
+            top_k=top_k,
+            user_id=user_id,
+            department_ids=department_ids or None,
+        )
+
+        # C05: Use real RRF scores from chunks, not hardcoded 1.0
         results: list[SearchResult] = []
         for chunk in chunks:
-            meta = dict(chunk.metadata)
-            if hasattr(chunk, "id") and chunk.id in scope_map:
-                scope, owner_id = scope_map[chunk.id]
-                meta["scope"] = scope
-                if owner_id is not None:
-                    meta["owner_id"] = str(owner_id)
+            meta = dict(chunk.metadata) if hasattr(chunk, "metadata") else {}
+            # C13/Fix-A: expose document_id (UUID) in metadata so downstream
+            # citation, eval, and recall metrics can map chunks back to their
+            # parent document. Without this, retrieved_ids is always empty.
+            doc_id = getattr(chunk, "document_id", None)
+            if doc_id is not None:
+                meta["document_id"] = str(doc_id)
             results.append(
                 SearchResult(
                     content=chunk.content,
-                    score=1.0,
+                    score=getattr(chunk, "score", 0.0),  # C05: real RRF score
                     source="rag",
                     metadata=meta,
                 )

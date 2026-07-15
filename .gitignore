@@ -74,3 +74,6 @@ target/
 
 # Uploads (user-generated content)
 uploads/
+
+# Competition evidence artifacts (generated, not committed)
+artifacts/competition-evidence/

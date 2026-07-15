@@ -373,6 +373,21 @@ async def build_deps(config: AppConfig) -> AppDeps:
     dispatcher = PgAgentDispatcher(db)
     tenant_manager = PgTenantManager(db, dispatcher)
     memory_engine = MemoryEngineImpl(memory_store, consolidator)
+
+    # C03: Use AsyncPostgresSaver checkpointer instead of MemorySaver.
+    # This persists graph state (including interrupt/resume for HITL) to
+    # PostgreSQL, surviving API restarts and enabling multi-worker recovery.
+    # Must use Async variant because LangGraph astream() calls aget_tuple().
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    import psycopg
+
+    # Convert asyncpg URL to psycopg format: postgresql+asyncpg:// → postgresql://
+    pg_dsn = config.db.url.replace("postgresql+asyncpg://", "postgresql://")
+    _checkpointer_conn = await psycopg.AsyncConnection.connect(pg_dsn, autocommit=True)
+    checkpointer = AsyncPostgresSaver(_checkpointer_conn)
+    await checkpointer.setup()  # idempotent: creates tables if missing
+
     runner = LangGraphRunnerImpl(
         llm=llm,
         skill_resolver=skill_resolver,
@@ -382,7 +397,9 @@ async def build_deps(config: AppConfig) -> AppDeps:
         memory_engine=memory_engine,
         tenant_manager=tenant_manager,
         dispatcher=dispatcher,
+        checkpointer=checkpointer,
         tool_registry=tool_registry,
+        db=db,
     )
     orchestrator = AgentOrchestratorImpl(
         llm=llm,
@@ -438,6 +455,51 @@ async def build_deps(config: AppConfig) -> AppDeps:
         policy=policy_engine,
     )
     set_global_harness(harness)
+
+    # C07: WritePipeline — governed write operations through Harness
+    from eaos.harness.write_pipeline import WritePipeline
+    from eaos.observability.audit import AuditLogger
+
+    audit_logger = AuditLogger(db)
+
+    def _connector_resolver(tool_name: str) -> Any:
+        """Resolve DataConnector by tool name prefix."""
+        for prefix, connector in data_connectors.items():
+            if tool_name.startswith(prefix):
+                return connector
+        raise ValueError(f"no connector for tool: {tool_name}")
+
+    write_pipeline = WritePipeline(
+        harness=harness,
+        connector_resolver=_connector_resolver,
+        audit_logger=audit_logger,
+        approval_gate=approval_gate,
+        db=db,  # C09: for idempotency key dedup queries
+    )
+
+    # C07: Register governed write tools
+    tool_registry.set_write_pipeline(write_pipeline)
+    tool_registry.register_write_tool(
+        tool_name="erp_create_sales_order",
+        resource="erp.orders",
+        operation="create",
+        risk_level="high",
+        description=(
+            "Create a sales order in the ERP system. "
+            "Requires admin approval (high-risk write). "
+            "Arguments: customer_code, product_sku, quantity, unit_price."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "customer_code": {"type": "string", "description": "Customer code (e.g. CUS-001)"},
+                "product_sku": {"type": "string", "description": "Product SKU (e.g. PRD-002)"},
+                "quantity": {"type": "integer", "description": "Order quantity"},
+                "unit_price": {"type": "number", "description": "Unit price"},
+            },
+            "required": ["customer_code", "product_sku", "quantity"],
+        },
+    )
 
     # 10. Ambient monitor (no-op notifier; admin API triggers list/manage only)
     ambient_monitor = PgAmbientMonitor(

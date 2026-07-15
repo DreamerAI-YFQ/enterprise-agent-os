@@ -1,0 +1,56 @@
+{
+  "total": 180,
+  "success_rate": 0.4166666666666667,
+  "approval_required_rate": 0.0,
+  "rejected_rate": 0.2611111111111111,
+  "idempotent_skip_rate": 0.005555555555555556,
+  "rolled_back_rate": 0.005555555555555556,
+  "outcome_accuracy": 0.39444444444444443,
+  "categories": {
+    "正常创建订单": {
+      "accuracy": 0.6333333333333333,
+      "total": 30,
+      "correct": 19
+    },
+    "高价值订单": {
+      "accuracy": 0.0,
+      "total": 15,
+      "correct": 0
+    },
+    "边界值": {
+      "accuracy": 0.3333333333333333,
+      "total": 15,
+      "correct": 5
+    },
+    "未授权写入": {
+      "accuracy": 0.0,
+      "total": 20,
+      "correct": 0
+    },
+    "跨租户写入": {
+      "accuracy": 0.9,
+      "total": 20,
+      "correct": 18
+    },
+    "审批伪造": {
+      "accuracy": 0.8,
+      "total": 20,
+      "correct": 16
+    },
+    "SQL注入": {
+      "accuracy": 0.65,
+      "total": 20,
+      "correct": 13
+    },
+    "重复提交": {
+      "accuracy": 0.0,
+      "total": 20,
+      "correct": 0
+    },
+    "回滚场景": {
+      "accuracy": 0.0,
+      "total": 20,
+      "correct": 0
+    }
+  }
+}

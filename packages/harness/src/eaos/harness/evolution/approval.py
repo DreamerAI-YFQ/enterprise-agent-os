@@ -149,11 +149,16 @@ class ApprovalGateImpl:
         approval_id: UUID,
         decided_by: UUID,
     ) -> None:
-        """Mark an approval ticket as approved."""
+        """Mark an approval ticket as approved.
+
+        C02/GAP-05: Only pending approvals can be approved. The SQL
+        condition ``status = 'pending'`` prevents approving an already-
+        decided, expired, or consumed ticket.
+        """
         await self._db.execute(
             """UPDATE harness.approvals
                SET status = 'approved', decided_by = :p0, decided_at = :p1
-               WHERE id = :p2""",
+               WHERE id = :p2 AND status = 'pending'""",
             decided_by,
             datetime.now(UTC),
             approval_id,
@@ -165,11 +170,14 @@ class ApprovalGateImpl:
         decided_by: UUID,
         reason: str,
     ) -> None:
-        """Mark an approval ticket as rejected."""
+        """Mark an approval ticket as rejected.
+
+        C02/GAP-05: Only pending approvals can be rejected.
+        """
         await self._db.execute(
             """UPDATE harness.approvals
                SET status = 'rejected', decided_by = :p0, decided_at = :p1
-               WHERE id = :p2""",
+               WHERE id = :p2 AND status = 'pending'""",
             decided_by,
             datetime.now(UTC),
             approval_id,

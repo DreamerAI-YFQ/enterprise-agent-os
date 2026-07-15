@@ -147,11 +147,24 @@ def _parse_plan(content: str) -> CollaborationPlan:
                 )
             )
 
+    agg_id = _parse_uuid(parsed.get("aggregator_agent_id"))
+    judge_id = _parse_uuid(parsed.get("judge_agent_id"))
+
+    # Safety: HIERARCHICAL/FAN_OUT_IN modes require aggregator_agent_id.
+    # If the LLM chose these modes but didn't provide an aggregator, degrade
+    # to SINGLE mode instead of raising an error at execution time.
+    if mode in (CollaborationMode.HIERARCHICAL, CollaborationMode.FAN_OUT_IN) and agg_id is None:
+        logger.warning(
+            "LLM chose %s mode without aggregator_agent_id, degrading to SINGLE",
+            mode.value,
+        )
+        mode = CollaborationMode.SINGLE
+
     return CollaborationPlan(
         mode=mode,
         subtasks=subtasks,
-        aggregator_agent_id=_parse_uuid(parsed.get("aggregator_agent_id")),
-        judge_agent_id=_parse_uuid(parsed.get("judge_agent_id")),
+        aggregator_agent_id=agg_id,
+        judge_agent_id=judge_id,
     )
 
 

@@ -24,7 +24,7 @@ from eaos.agent.runner import AgentEvent  # noqa: TC002 — runtime for error ev
 from eaos.core.auth import Principal  # noqa: TC002
 from eaos.core.context import TenantContext
 from eaos.core.errors import PermissionDeniedError
-from eaos.gateway.api.deps import get_db, get_principal, get_runner
+from eaos.gateway.api.deps import get_db, get_orchestrator, get_principal, get_runner
 from eaos.gateway.api.routes.multimodal_loader import load_attachment
 from eaos.infra.llm.base import Attachment  # noqa: TC002
 from fastapi import APIRouter, Depends, HTTPException, Request  # noqa: TC002
@@ -34,6 +34,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from eaos.agent.orchestrator import AgentOrchestratorImpl
     from eaos.agent.runner import AgentRunner
     from eaos.infra.db.base import DbClient
 
@@ -62,11 +63,16 @@ class InvokeRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    """Request body for POST /interrupt/{session_id}/resume."""
+    """Request body for POST /interrupt/{session_id}/resume.
+
+    C02/GAP-05: ``decision`` field is IGNORED — the server queries the real
+    approval record from the database. This prevents clients from forging
+    an approval by sending ``decision="approved"``.
+    """
 
     agent_id: UUID
     approval_id: UUID
-    decision: str  # "approved" | "rejected"
+    decision: str = ""  # deprecated: ignored, kept for backward compat
     reason: str | None = None
 
 
@@ -179,6 +185,7 @@ async def invoke(
     request: Request,
     principal: Principal = Depends(get_principal),  # noqa: B008
     runner: AgentRunner = Depends(get_runner),  # noqa: B008
+    orchestrator: AgentOrchestratorImpl = Depends(get_orchestrator),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> StreamingResponse:
     """Stream agent execution events as SSE.
@@ -207,12 +214,28 @@ async def invoke(
     )
     await _touch_session(db, session_id)
 
+    # C02-02: Load real department memberships for the user instead of
+    # hardcoding agent_scope="personal" with empty department_ids.
+    department_ids: list[UUID] = []
+    try:
+        dept_rows = await db.fetch_all(
+            "SELECT department_id FROM iam.department_members "
+            "WHERE user_id = :p0 AND tenant_id = :p1",
+            principal.user_id,
+            principal.tenant_id,
+        )
+        if dept_rows:
+            department_ids = [r["department_id"] for r in dept_rows]
+    except Exception:  # noqa: BLE001 — departments are best-effort
+        logger.warning("failed to load departments for user %s", principal.user_id)
+
     ctx = TenantContext(
         tenant_id=principal.tenant_id,
         user_id=principal.user_id,
         agent_id=body.agent_id,
         agent_scope="personal",
         session_id=session_id,
+        department_ids=department_ids,
     )
 
     # Load attachments (image -> data URL; file -> extracted text).
@@ -239,11 +262,21 @@ async def invoke(
     async def event_stream() -> AsyncIterator[str]:
         final_content: str | None = None
         try:
-            stream = runner.invoke(
-                ctx,
-                body.message,
-                attachments=attachments or None,
-            )
+            # C12/GAP-01: Route through Orchestrator for multi-agent support.
+            # Orchestrator analyzes the task and decides:
+            # - SINGLE → delegates to AgentRunner (same as before)
+            # - RELAY/FAN_OUT_IN/DEBATE/HIERARCHICAL → multi-agent collaboration
+            # Attachments are only supported in SINGLE mode (passed to runner).
+            if attachments:
+                # Attachments require direct runner access (Orchestrator doesn't support them)
+                stream = runner.invoke(
+                    ctx,
+                    body.message,
+                    attachments=attachments or None,
+                )
+            else:
+                # C12: Use Orchestrator for all text-only invocations
+                stream = orchestrator.execute(ctx, body.message)
             async for event in stream:
                 if event.type == "final" and event.content:
                     final_content = event.content
@@ -287,8 +320,77 @@ async def interrupt_resume(
 ) -> StreamingResponse:
     """Resume a paused high-risk skill after HITL approval.
 
+    C02/GAP-05: The ``decision`` field in the request body is IGNORED.
+    The server queries the real approval record from ``harness.approvals``
+    and verifies:
+    - approval exists and belongs to this tenant
+    - approval belongs to this session
+    - approval status is 'approved' (not pending/rejected/expired)
+    - approval has not been consumed (one-time use)
+
     Persists the resumed assistant response (best-effort).
     """
+    # C02/GAP-05: Query the REAL approval status from the database.
+    # Client-supplied ``decision`` is never trusted.
+    approval_row = await db.fetch_one(
+        """SELECT id, tenant_id, session_id, status, agent_id
+           FROM harness.approvals
+           WHERE id = :p0""",
+        body.approval_id,
+    )
+    if approval_row is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+
+    # Verify tenant ownership
+    if approval_row["tenant_id"] != principal.tenant_id:
+        raise HTTPException(status_code=404, detail="approval not found")
+
+    # Verify session binding
+    if approval_row["session_id"] != session_id:
+        raise HTTPException(
+            status_code=403,
+            detail="approval does not belong to this session",
+        )
+
+    # Verify agent binding
+    if approval_row["agent_id"] != body.agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="approval does not belong to this agent",
+        )
+
+    real_status = str(approval_row["status"])
+
+    if real_status == "pending":
+        raise HTTPException(
+            status_code=409,
+            detail="approval is still pending — admin must approve first",
+        )
+    if real_status == "rejected":
+        raise HTTPException(
+            status_code=403,
+            detail="approval was rejected by admin",
+        )
+    if real_status == "expired":
+        raise HTTPException(
+            status_code=410,
+            detail="approval has expired",
+        )
+    if real_status != "approved":
+        raise HTTPException(
+            status_code=403,
+            detail=f"approval status is '{real_status}', cannot resume",
+        )
+
+    # C02/GAP-05: Mark approval as consumed (one-time use) to prevent
+    # replay attacks. The status changes from 'approved' to 'consumed'.
+    await db.execute(
+        """UPDATE harness.approvals
+           SET status = 'consumed'
+           WHERE id = :p0 AND status = 'approved'""",
+        body.approval_id,
+    )
+
     ctx = TenantContext(
         tenant_id=principal.tenant_id,
         user_id=principal.user_id,
@@ -296,9 +398,10 @@ async def interrupt_resume(
         agent_scope="personal",
         session_id=session_id,
     )
+    # Pass the verified approval status to the runner
     approval: dict[str, Any] = {
         "id": str(body.approval_id),
-        "status": body.decision,
+        "status": "approved",  # always "approved" here — we verified above
         "reason": body.reason,
     }
 

@@ -1,0 +1,251 @@
+# Competition Claim Matrix
+# 每项能力主张必须闭合为：源码锚点 → 可复现运行入口 → 原始产物 → 量化指标 → 边界
+# 层级：L1源码存在 / L2组件可信 / L3主链闭合 / L4证据闭合
+
+claims:
+  - claim_id: C-KNOW-01
+    statement: "员工可提交独有知识，管理员审核后幂等入库，另一授权用户可跨部门复用并引用来源"
+    level: 核心
+    current_maturity: L2
+    target_maturity: L4
+    boundary: "项目内隔离式模拟ERP/PostgreSQL；真实LLM+Embedding"
+    source_anchors:
+      - packages/gateway/src/eaos/gateway/api/routes/contributions.py
+      - packages/knowledge/src/eaos/knowledge/rag/pipeline.py
+      - packages/infra/src/eaos/infra/db/migrations/versions/0013_knowledge_contributions.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "审核后复用成功率"
+        threshold: ">=90%"
+        result: pending
+      - name: "审核前后配对提升"
+        threshold: ">=40pp, 95% CI下界>25pp"
+        result: pending
+      - name: "重复审核不产生重复Document"
+        threshold: "100%"
+        result: pending
+    g0_safety:
+      - "pending/rejected内容不可检索"
+      - "跨租户/跨部门权限隔离"
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations: []
+
+  - claim_id: C-RAG-01
+    statement: "Agent在聊天中选择RAG，权限前置检索+重排，基于证据回答并引用来源，无证据时拒答"
+    level: 核心
+    current_maturity: L1-L2
+    target_maturity: L4
+    boundary: "ILIKE词法匹配（非BM25）；固定语料150+查询"
+    source_anchors:
+      - packages/knowledge/src/eaos/knowledge/rag/retriever.py
+      - packages/knowledge/src/eaos/knowledge/engine.py
+      - packages/agent/src/eaos/agent/runner.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "Hit@5"
+        threshold: ">=95%"
+        result: pending
+      - name: "Recall@5"
+        threshold: ">=90%"
+        result: pending
+      - name: "nDCG@5"
+        threshold: ">=0.85"
+        result: pending
+      - name: "Answer Accuracy"
+        threshold: ">=85%"
+        result: pending
+      - name: "Faithfulness"
+        threshold: ">=90%"
+        result: pending
+      - name: "Citation Precision"
+        threshold: ">=95%"
+        result: pending
+      - name: "无答案拒答率"
+        threshold: ">=90%"
+        result: pending
+      - name: "跨租户泄漏"
+        threshold: "0"
+        result: pending
+    g0_safety:
+      - "无权限高分Chunk不进入候选集（不是Top-K后过滤）"
+      - "跨租户Canary在结果/答案/trace/日志中0次出现"
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "当前score固定为1.0，需修复"
+      - "权限过滤可能在Top-K后执行"
+
+  - claim_id: C-WORK-01
+    statement: "Agent理解自然语言订单请求，选择受控命令，确定性解析参数，经审批后写入模拟ERP"
+    level: 核心
+    current_maturity: L1
+    target_maturity: L4
+    boundary: "仅创建销售订单；项目内隔离式模拟ERP；180个独立任务"
+    source_anchors:
+      - packages/data/src/eaos/data/mcp/registry.py
+      - packages/data/src/eaos/data/erp_connector.py
+      - packages/agent/src/eaos/agent/runner.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "决策/工具选择准确率"
+        threshold: ">=95%"
+        result: pending
+      - name: "参数严格准确率"
+        threshold: ">=90%"
+        result: pending
+      - name: "严格任务完成率"
+        threshold: ">=85%"
+        result: pending
+      - name: "合法高风险完成率"
+        threshold: ">=95%"
+        result: pending
+    g0_safety:
+      - "审批前零写入"
+      - "重试零重复订单"
+      - "不开放任意SQL/任意表写入"
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "ToolRegistry当前无受控写工具"
+      - "WritePipeline未接入主链"
+
+  - claim_id: C-TRUST-01
+    statement: "高风险写入经管理员独立审批，服务端核验绑定，一次性恢复，审批不可伪造/重放/跨会话"
+    level: 核心
+    current_maturity: L1-L2
+    target_maturity: L4
+    boundary: "模拟ERP；审批绑定intent digest+idempotency key"
+    source_anchors:
+      - packages/harness/src/eaos/harness/evolution/approval.py
+      - packages/harness/src/eaos/harness/write_pipeline.py
+      - packages/gateway/src/eaos/gateway/api/routes/admin.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "审批伪造/重放/跨会话绕过"
+        threshold: "0"
+        result: pending
+      - name: "高风险审批触发率"
+        threshold: "100%"
+        result: pending
+      - name: "拒绝/过期审批执行次数"
+        threshold: "0"
+        result: pending
+    g0_safety:
+      - "客户端decision字段无效"
+      - "服务端查询真实审批记录"
+      - "pending/rejected/expired/他租户/他会话均不可恢复"
+      - "approved只执行一次（一次性消费）"
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "当前ResumeRequest信任客户端decision"
+      - "WritePipeline只看approval_id非空"
+      - "approve/reject SQL缺tenant/status条件"
+
+  - claim_id: C-TRUST-02
+    statement: "写入产生before/after审计，幂等执行，故障注入下补偿回滚经数据库终态验证"
+    level: 核心
+    current_maturity: L1-L2
+    target_maturity: L4
+    boundary: "模拟ERP上的补偿恢复，非跨系统强一致分布式事务"
+    source_anchors:
+      - packages/harness/src/eaos/harness/write_pipeline.py
+      - packages/observability/src/eaos/observability/audit.py
+      - packages/data/src/eaos/data/erp_connector.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "回滚成功率"
+        threshold: "100%（>=60样本，>=6故障点）"
+        result: pending
+      - name: "重试重复订单数"
+        threshold: "0（>=50重试）"
+        result: pending
+      - name: "审计关键字段完整率"
+        threshold: "100%"
+        result: pending
+      - name: "Trace-审批-审计-业务记录关联率"
+        threshold: "100%"
+        result: pending
+    g0_safety:
+      - "回滚异常不被吞后报成功"
+      - "数据库终态等于before snapshot才设rolled_back=True"
+      - "回滚失败时设rollback_error/compensation_failed"
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "当前回滚异常被pass吞掉"
+      - "无幂等键实现"
+      - "create未稳定返回after snapshot"
+
+  - claim_id: C-HISTORY-01
+    statement: "历史会话被模型真实使用，LangGraph checkpoint持久化到PostgreSQL，重启后可恢复"
+    level: 必须支撑
+    current_maturity: L1
+    target_maturity: L3/L4
+    boundary: "真实PostgreSQL checkpointer；非MemorySaver"
+    source_anchors:
+      - packages/agent/src/eaos/agent/runner.py
+      - packages/gateway/src/eaos/gateway/api/routes/sessions.py
+      - packages/infra/src/eaos/infra/db/migrations/versions/0010_agent_messages.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "第二轮代词/省略依赖第一轮信息"
+        threshold: "正确率>=90%"
+        result: pending
+      - name: "API重启后历史仍被使用"
+        threshold: "pass"
+        result: pending
+      - name: "多租户/多会话不串线"
+        threshold: "pass"
+        result: pending
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "默认MemorySaver，重启后丢失"
+      - "Runner初始state只放当前消息，不加载历史"
+
+  - claim_id: C-SKILL-01
+    statement: "至少一个真实Skill从聊天入口端到端执行，非法Skill fail closed"
+    level: 必须支撑
+    current_maturity: L1-L2
+    target_maturity: L3/L4
+    boundary: "从seed Skill中选择或新增一个最小Skill"
+    source_anchors:
+      - packages/skills/src/eaos/skills/resolver.py
+      - packages/skills/src/eaos/skills/executor.py
+      - packages/agent/src/eaos/agent/runner.py
+    dataset_version: "pending"
+    case_ids: []
+    run_ids: []
+    metrics:
+      - name: "不存在/越权Skill不误执行"
+        threshold: "100%"
+        result: pending
+      - name: "自动选择和@mention两种方式"
+        threshold: "pass"
+        result: pending
+    owner: pending
+    reviewer: pending
+    result: pending
+    limitations:
+      - "Resolver查询未返回完整instructions/tools/tool_bindings"
+      - "不存在Skill可能回退第一个"
