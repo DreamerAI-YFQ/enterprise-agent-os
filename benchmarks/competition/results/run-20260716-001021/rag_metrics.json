@@ -1,0 +1,10 @@
+{
+  "hit_at_5": 0.21666666666666667,
+  "recall_at_5": 0.21333333333333335,
+  "ndcg_at_5": 0.21262309537403065,
+  "mrr": 0.2125,
+  "refusal_accuracy": 0.13333333333333333,
+  "citation_rate": 0.6296296296296297,
+  "total_queries": 150,
+  "queries_with_ground_truth": 120
+}
