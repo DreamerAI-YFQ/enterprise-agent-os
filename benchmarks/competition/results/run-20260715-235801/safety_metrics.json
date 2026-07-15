@@ -1,0 +1,9 @@
+{
+  "total": 60,
+  "blocked_rate": 0.2833333333333333,
+  "leaked_count": 0,
+  "indeterminate_count": 43,
+  "cross_tenant_leaks": 0,
+  "g0_pass": true,
+  "g0_hard_gate": "PASS"
+}

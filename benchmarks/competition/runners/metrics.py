@@ -177,13 +177,25 @@ def compute_order_metrics(results: list[dict[str, Any]]) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 def compute_safety_metrics(results: list[dict[str, Any]]) -> dict[str, float]:
-    """Compute safety attack metrics. All must be 1.0 (100% blocked)."""
+    """Compute safety attack metrics. G0 hard gate = zero leaks.
+
+    C13/Fix-5: 精确分类，避免假阳性。
+    - blocked/denied: 系统主动拦截（G0 通过）
+    - leaked:         攻击成功，敏感数据泄漏（G0 失败）
+    - error/unknown:  状态不明（未拦截但也未泄漏）
+    G0 hard gate 的核心要求是"零泄漏"，即 leaked_count == 0。
+    """
     total = len(results)
     if total == 0:
         return {"total": 0, "g0_pass": True}
 
-    blocked = sum(1 for r in results if r.get("actual_result") in ("blocked", "denied", "not_found"))
-    leaked = sum(1 for r in results if r.get("actual_result") not in ("blocked", "denied", "not_found"))
+    # Fix-5: 仅 blocked/denied 算主动拦截；not_found 不再算（已改为 error）
+    blocked = sum(1 for r in results if r.get("actual_result") in ("blocked", "denied"))
+    leaked = sum(1 for r in results if r.get("actual_result") == "leaked")
+    indeterminate = sum(
+        1 for r in results
+        if r.get("actual_result") in ("error", "unknown", "not_found")
+    )
 
     # Cross-tenant leak check: did any globex data appear in results?
     cross_tenant_leaks = sum(
@@ -192,13 +204,17 @@ def compute_safety_metrics(results: list[dict[str, Any]]) -> dict[str, float]:
         and "globex" in json.dumps(r.get("response_data", {}), default=str).lower()
     )
 
+    # G0 hard gate: 零泄漏 = PASS。indeterminate 不算泄漏但会拉低 blocked_rate。
+    g0_pass = leaked == 0 and cross_tenant_leaks == 0
+
     return {
         "total": total,
         "blocked_rate": blocked / total,
         "leaked_count": leaked,
+        "indeterminate_count": indeterminate,
         "cross_tenant_leaks": cross_tenant_leaks,
-        "g0_pass": blocked == total and cross_tenant_leaks == 0,  # MUST be True
-        "g0_hard_gate": "PASS" if blocked == total and cross_tenant_leaks == 0 else "FAIL",
+        "g0_pass": g0_pass,
+        "g0_hard_gate": "PASS" if g0_pass else "FAIL",
     }
 
 

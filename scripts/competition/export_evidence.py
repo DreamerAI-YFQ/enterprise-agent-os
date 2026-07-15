@@ -48,10 +48,10 @@ async def export_trace(db_url: str, run_id: str, output_dir: Path) -> list[dict[
         result = subprocess.run(
             ["docker", "exec", "eaos-postgres",
              "psql", "-U", "eaos", "-d", "eaos", "-t", "-A", "-c",
-             "SELECT id, tenant_id, agent_id, session_id, span_name, "
-             "attributes, started_at, ended_at, status "
-             "FROM observability.traces "
-             "ORDER BY started_at"],
+             "SELECT id, tenant_id, agent_id, session_id, name, "
+             "attributes, start_time, end_time, status, cost_tokens, cost_usd "
+             "FROM trace.spans "
+             "ORDER BY start_time"],
             capture_output=True, text=True, timeout=60, encoding="utf-8",
         )
         for line in result.stdout.strip().splitlines():
@@ -64,11 +64,13 @@ async def export_trace(db_url: str, run_id: str, output_dir: Path) -> list[dict[
                     "tenant_id": parts[1],
                     "agent_id": parts[2],
                     "session_id": parts[3],
-                    "span_name": parts[4],
+                    "name": parts[4],
                     "attributes": parts[5],
-                    "started_at": parts[6],
-                    "ended_at": parts[7],
+                    "start_time": parts[6],
+                    "end_time": parts[7],
                     "status": parts[8],
+                    "cost_tokens": parts[9] if len(parts) > 9 else "",
+                    "cost_usd": parts[10] if len(parts) > 10 else "",
                 })
     except Exception as e:
         print(f"  [WARN] trace export failed: {e}")
@@ -90,8 +92,8 @@ async def export_audit(db_url: str, run_id: str, output_dir: Path) -> list[dict[
             ["docker", "exec", "eaos-postgres",
              "psql", "-U", "eaos", "-d", "eaos", "-t", "-A", "-c",
              "SELECT id, tenant_id, principal_id, tool_name, resource, "
-             "operation, success, before_data, after_data, approval_id, "
-             "trace_id, error, created_at "
+             "operation, success, before_state, after_state, approval_id, "
+             "trace_id, error, rolled_back, rollback_reason, created_at "
              "FROM harness.write_audit ORDER BY created_at"],
             capture_output=True, text=True, timeout=60, encoding="utf-8",
         )
@@ -99,7 +101,7 @@ async def export_audit(db_url: str, run_id: str, output_dir: Path) -> list[dict[
             if not line:
                 continue
             parts = line.split("|")
-            if len(parts) >= 13:
+            if len(parts) >= 15:
                 rows.append({
                     "id": parts[0],
                     "tenant_id": parts[1],
@@ -108,12 +110,14 @@ async def export_audit(db_url: str, run_id: str, output_dir: Path) -> list[dict[
                     "resource": parts[4],
                     "operation": parts[5],
                     "success": parts[6],
-                    "before_data": parts[7],
-                    "after_data": parts[8],
+                    "before_state": parts[7],
+                    "after_state": parts[8],
                     "approval_id": parts[9],
                     "trace_id": parts[10],
                     "error": parts[11],
-                    "created_at": parts[12],
+                    "rolled_back": parts[12],
+                    "rollback_reason": parts[13],
+                    "created_at": parts[14],
                 })
     except Exception as e:
         print(f"  [WARN] audit export failed: {e}")
@@ -164,13 +168,22 @@ async def export_business_state(db_url: str, run_id: str, output_dir: Path) -> l
 
     state_file = output_dir / "business_state.json"
 
+    # C13/Fix-4: inventory has no created_at column — use updated_at instead.
+    _ORDER_COL: dict[str, str] = {
+        "erp.orders": "created_at",
+        "erp.inventory": "updated_at",
+        "erp.customers": "created_at",
+        "erp.products": "created_at",
+    }
+
     state: dict[str, Any] = {}
     try:
         for table in ["erp.orders", "erp.inventory", "erp.customers", "erp.products"]:
+            order_col = _ORDER_COL.get(table, "created_at")
             result = subprocess.run(
                 ["docker", "exec", "eaos-postgres",
                  "psql", "-U", "eaos", "-d", "eaos", "-t", "-A", "-c",
-                 f"SELECT row_to_json(t) FROM {table} t ORDER BY created_at LIMIT 100"],
+                 f"SELECT row_to_json(t) FROM {table} t ORDER BY {order_col} LIMIT 100"],
                 capture_output=True, text=True, timeout=30, encoding="utf-8",
             )
             table_rows = []
@@ -190,7 +203,7 @@ async def export_business_state(db_url: str, run_id: str, output_dir: Path) -> l
 
 
 async def export_usage(db_url: str, run_id: str, output_dir: Path) -> list[dict[str, Any]]:
-    """Export LLM usage metrics from traces."""
+    """Export LLM usage metrics from trace.spans."""
     import subprocess
 
     usage_file = output_dir / "usage.json"
@@ -199,22 +212,38 @@ async def export_usage(db_url: str, run_id: str, output_dir: Path) -> list[dict[
         result = subprocess.run(
             ["docker", "exec", "eaos-postgres",
              "psql", "-U", "eaos", "-d", "eaos", "-t", "-A", "-c",
-             "SELECT id, attributes FROM observability.traces "
-             "WHERE span_name = 'llm_chat' ORDER BY started_at"],
+             "SELECT id, name, cost_tokens, cost_usd, attributes "
+             "FROM trace.spans WHERE cost_tokens > 0 "
+             "ORDER BY start_time"],
             capture_output=True, text=True, timeout=60, encoding="utf-8",
         )
         for line in result.stdout.strip().splitlines():
             if not line:
                 continue
-            parts = line.split("|", 1)
-            if len(parts) == 2:
+            parts = line.split("|", 4)
+            if len(parts) >= 4:
+                span_id = parts[0]
+                span_name = parts[1]
                 try:
-                    attrs = json.loads(parts[1]) if parts[1].startswith("{") else {}
-                    tokens = attrs.get("total_tokens", 0)
-                    usage["total_tokens"] += tokens
-                    usage["calls"].append({"trace_id": parts[0], "tokens": tokens, "attrs": attrs})
-                except json.JSONDecodeError:
-                    pass
+                    tokens = int(parts[2]) if parts[2] else 0
+                except ValueError:
+                    tokens = 0
+                try:
+                    cost = float(parts[3]) if parts[3] else 0.0
+                except ValueError:
+                    cost = 0.0
+                attrs = {}
+                if len(parts) > 4 and parts[4].startswith("{"):
+                    try:
+                        attrs = json.loads(parts[4])
+                    except json.JSONDecodeError:
+                        pass
+                usage["total_tokens"] += tokens
+                usage["total_cost_usd"] += cost
+                usage["calls"].append({
+                    "span_id": span_id, "name": span_name,
+                    "tokens": tokens, "cost_usd": cost, "attrs": attrs,
+                })
     except Exception as e:
         print(f"  [WARN] usage export failed: {e}")
 

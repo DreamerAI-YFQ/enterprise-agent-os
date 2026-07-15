@@ -161,7 +161,9 @@ async def demo_a_knowledge_loop() -> dict[str, Any]:
         result["steps"].append(step3)
 
     # Summary
-    all_ok = all(s.get("status") in ("ok", "partial") for s in result["steps"])
+    # C13/Fix-6: 仅 "ok" 算 Pass；partial 表示步骤未完全成功（如知识未检索到、
+    # 权限拦截、幂等未检测），不应判为整体通过。
+    all_ok = all(s.get("status") == "ok" for s in result["steps"])
     result["passed"] = all_ok
     print(f"\nDemo A: {'PASS' if result['passed'] else 'FAIL'}")
     return result
@@ -317,7 +319,9 @@ async def demo_b_order_loop() -> dict[str, Any]:
         result["steps"].append(step4)
 
     # Summary
-    all_ok = all(s.get("status") in ("ok", "partial") for s in result["steps"])
+    # C13/Fix-6: 仅 "ok" 算 Pass；partial 表示步骤未完全成功（如权限拦截、
+    # 幂等未检测、审计未找到写记录），不应判为整体通过。
+    all_ok = all(s.get("status") == "ok" for s in result["steps"])
     result["passed"] = all_ok
     print(f"\nDemo B: {'PASS' if result['passed'] else 'FAIL'}")
     return result

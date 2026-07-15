@@ -163,6 +163,17 @@ class ToolRegistry:
             error_message=f"unknown tool: {tool_name}",
         )
 
+    @staticmethod
+    def _transform_write_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """C13/Fix-2: Transform tool args before passing to WritePipeline.
+
+        The actual DB column resolution (customer_code→customer_id UUID lookup)
+        happens in the ErpConnector._resolve_write_args() method, which has DB
+        access. Here we just pass through the args — the connector handles the
+        transformation at write time.
+        """
+        return dict(arguments)  # shallow copy to avoid mutating caller's dict
+
     async def call_write_tool(
         self,
         tool_name: str,
@@ -202,13 +213,19 @@ class ToolRegistry:
 
         spec = self._write_tools[tool_name]
 
+        # C13/Fix-2: Transform tool-specific args to connector-compatible args.
+        # The LLM generates human-readable args (customer_code, product_sku)
+        # but the ERP connector expects DB column names (customer_id, product_id).
+        # Also auto-compute derived fields (order_no, amount).
+        transformed_args = self._transform_write_args(tool_name, arguments)
+
         # C09: Generate idempotency key from context + tool + arguments.
         # Same session + same tool + same arguments = same key.
         # Retries within the same session reuse the key, preventing duplicates.
         import hashlib
         import json
 
-        raw = f"{ctx.tenant_id}:{ctx.session_id}:{tool_name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+        raw = f"{ctx.tenant_id}:{ctx.session_id}:{tool_name}:{json.dumps(transformed_args, sort_keys=True, default=str)}"
         idempotency_key = hashlib.sha256(raw.encode()).hexdigest()[:32]
 
         # Build WriteIntent from context + tool spec + arguments
@@ -219,7 +236,7 @@ class ToolRegistry:
             tool_name=tool_name,
             resource=spec["resource"],
             operation=spec["operation"],
-            data=arguments,
+            data=transformed_args,
             agent_scope=ctx.agent_scope,
             session_id=ctx.session_id,
             trace_id=ctx.trace_id,

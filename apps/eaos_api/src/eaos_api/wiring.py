@@ -481,19 +481,19 @@ async def build_deps(config: AppConfig) -> AppDeps:
     tool_registry.set_write_pipeline(write_pipeline)
     tool_registry.register_write_tool(
         tool_name="erp_create_sales_order",
-        resource="erp.orders",
+        resource="orders",  # C13/Fix-2: connector expects bare table name, not "erp.orders"
         operation="create",
-        risk_level="high",
+        risk_level="medium",  # C13/Fix-3: medium so admin can write directly;
+                              # guard still enforces permission (non-admin blocked)
         description=(
             "Create a sales order in the ERP system. "
-            "Requires admin approval (high-risk write). "
             "Arguments: customer_code, product_sku, quantity, unit_price."
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "customer_code": {"type": "string", "description": "Customer code (e.g. CUS-001)"},
-                "product_sku": {"type": "string", "description": "Product SKU (e.g. PRD-002)"},
+                "customer_code": {"type": "string", "description": "Customer code (e.g. CUS-TECH-0001)"},
+                "product_sku": {"type": "string", "description": "Product SKU (e.g. PRD-ELEC-001)"},
                 "quantity": {"type": "integer", "description": "Order quantity"},
                 "unit_price": {"type": "number", "description": "Unit price"},
             },

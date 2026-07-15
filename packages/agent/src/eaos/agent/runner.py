@@ -742,12 +742,29 @@ class LangGraphRunnerImpl:
             try:
                 result = await registry.call_write_tool(tool_name, tool_args, exec_ctx)
             except Exception as exc:
-                # WriteApprovalRequired or other write pipeline error
-                result = McpToolResult(
-                    content=[{"type": "text", "text": str(exc)}],
-                    is_error=True,
-                    error_message=str(exc),
-                )
+                # C13/Fix-3: Distinguish WriteApprovalRequired (HITL gate)
+                # from other errors. WriteApprovalRequired means the approval
+                # record WAS created in harness.approvals — the caller should
+                # handle the interrupt/resume flow, not treat it as a failure.
+                exc_name = type(exc).__name__
+                if exc_name == "WriteApprovalRequired":
+                    # Extract approval_id from the exception
+                    approval_id = getattr(exc, "approval_id", None)
+                    result = McpToolResult(
+                        content=[{"type": "text", "text": (
+                            f"approval_required: {exc} "
+                            f"(approval_id={approval_id})"
+                        )}],
+                        is_error=False,  # not an error — it's a pending approval
+                        error_message=None,
+                    )
+                else:
+                    # Permission denied, validation error, etc.
+                    result = McpToolResult(
+                        content=[{"type": "text", "text": str(exc)}],
+                        is_error=True,
+                        error_message=str(exc),
+                    )
         else:
             result = await registry.call_tool(
                 tool_name, tool_args, ctx.tenant_id
@@ -1080,7 +1097,7 @@ class LangGraphRunnerImpl:
                     "SELECT role, content FROM agent.messages "
                     "WHERE session_id = :p0 AND tenant_id = :p1 "
                     "AND role IN ('user', 'assistant') "
-                    "AND event_type IS NULL OR event_type = 'final' "
+                    "AND (event_type IS NULL OR event_type = 'final') "
                     "ORDER BY created_at ASC LIMIT 20",
                     ctx.session_id,
                     ctx.tenant_id,

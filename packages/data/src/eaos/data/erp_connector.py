@@ -120,6 +120,78 @@ class ErpConnector:
         total = int(count_row["total"]) if count_row else 0
         return DataResult(rows=rows, total=total)
 
+    async def _resolve_write_args(
+        self,
+        tenant_id: UUID,
+        resource: str,
+        operation: WriteOperation,
+    ) -> None:
+        """C13/Fix-2: Resolve human-readable args to DB column values.
+
+        Mutates ``operation.data`` in place. For ``orders`` create:
+        - customer_code → customer_id (UUID lookup from erp.customers)
+        - product_sku → product_id (UUID lookup from erp.products)
+        - auto-generate order_no, amount, status, order_date if missing
+        """
+        if resource != "orders" or operation.operation != "create":
+            return
+        data = operation.data
+
+        # Resolve customer_code → customer_id
+        if "customer_code" in data and "customer_id" not in data:
+            code = data.pop("customer_code")
+            row = await self._db.fetch_one(
+                "SELECT id FROM erp.customers "
+                "WHERE tenant_id = :p0 AND code = :p1 LIMIT 1",
+                tenant_id, code,
+            )
+            if row is None:
+                data["customer_id"] = None
+                data["_error"] = f"customer not found: {code}"
+                return
+            data["customer_id"] = str(row["id"])
+
+        # Resolve product_sku → product_id
+        if "product_sku" in data and "product_id" not in data:
+            sku = data.pop("product_sku")
+            row = await self._db.fetch_one(
+                "SELECT id, unit_price FROM erp.products "
+                "WHERE tenant_id = :p0 AND sku = :p1 LIMIT 1",
+                tenant_id, sku,
+            )
+            if row is None:
+                data["product_id"] = None
+                data["_error"] = f"product not found: {sku}"
+                return
+            data["product_id"] = str(row["id"])
+            # If unit_price not provided by user, use the product's price
+            if "unit_price" not in data and row.get("unit_price"):
+                data["unit_price"] = float(row["unit_price"])
+
+        # Remove error sentinel if resolution succeeded
+        data.pop("_error", None)
+
+        # Auto-generate order_no
+        if "order_no" not in data:
+            import time
+            data["order_no"] = f"ORD-{int(time.time())}-{data.get('customer_id', 'x')[-4:]}"
+
+        # Compute amount = quantity * unit_price
+        if "amount" not in data:
+            qty = data.get("quantity", 0)
+            price = data.get("unit_price", 0)
+            try:
+                data["amount"] = float(qty) * float(price)
+            except (TypeError, ValueError):
+                data["amount"] = 0.0
+
+        # Set defaults
+        if "status" not in data:
+            data["status"] = "pending"
+        if "order_date" not in data:
+            from datetime import date
+            data["order_date"] = date.today()
+
     async def write(
         self,
         tenant_id: UUID,
@@ -135,6 +207,11 @@ class ErpConnector:
             return WriteResult(
                 success=False, error=f"resource {resource} is read-only"
             )
+
+        # C13/Fix-2: Resolve human-readable args to DB column values.
+        # The LLM passes customer_code/product_sku; the DB needs UUIDs.
+        # Also auto-generates order_no, computes amount, sets defaults.
+        await self._resolve_write_args(tenant_id, resource, operation)
 
         # 2. before snapshot for update/delete (supplies rollback context)
         before: dict[str, Any] | None = None
