@@ -58,9 +58,21 @@ class OpenAIEmbedder:
                     model=self._config.model,
                     dimensions=self._config.dimensions,
                 )
-            except openai.BadRequestError:
+            except openai.BadRequestError as exc:
                 # Some providers (e.g. SiliconFlow BAAI/bge-m3) don't accept
-                # the dimensions param — retry without it.
+                # the dimensions param. Retry without it, using a fresh client
+                # to avoid connection-state issues after the 400 response.
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "Embedding BadRequest with dimensions=%s for model=%s: %s. "
+                    "Retrying without dimensions.",
+                    self._config.dimensions,
+                    self._config.model,
+                    exc,
+                )
+                self._client = None
+                client = self._get_client()
                 response = await client.embeddings.create(
                     input=text,
                     model=self._config.model,
@@ -81,7 +93,18 @@ class OpenAIEmbedder:
                     model=self._config.model,
                     dimensions=self._config.dimensions,
                 )
-            except openai.BadRequestError:
+            except openai.BadRequestError as exc:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "Embedding batch BadRequest with dimensions=%s for model=%s: %s. "
+                    "Retrying without dimensions.",
+                    self._config.dimensions,
+                    self._config.model,
+                    exc,
+                )
+                self._client = None
+                client = self._get_client()
                 response = await client.embeddings.create(
                     input=texts,
                     model=self._config.model,
