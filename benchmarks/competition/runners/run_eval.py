@@ -329,8 +329,19 @@ async def run_rag_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, A
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=300) as client:
         for i, case in enumerate(cases):
-            token = tokens.get(case.get("user_role", "employee"), tokens["employee"])
+            role = case.get("user_role", "employee")
+            token = tokens.get(role, tokens["employee"])
             result = await eval_rag_case(client, token, case, doc_id_map=doc_id_map)
+
+            # C13/Fix-5: Auto-refresh token on 401 (JWT expires during long runs)
+            if result.get("actual_status") == "exception" and "401" in str(result.get("error", "")):
+                email = ADMIN_EMAIL if role == "admin" else EMPLOYEE_EMAIL
+                password = ADMIN_PASSWORD if role == "admin" else EMPLOYEE_PASSWORD
+                print(f"    [Token expired] Re-login as {role}...")
+                tokens[role] = await login(client, email, password)
+                token = tokens[role]
+                result = await eval_rag_case(client, token, case, doc_id_map=doc_id_map)
+
             results.append(result)
             status = "OK" if result.get("actual_status") == "ok" else "ERR"
             print(f"    [{i+1}/{len(cases)}] [{status}] {case['case_id']}: {case['query'][:40]}...")
@@ -474,6 +485,16 @@ async def run_order_suite(tokens: dict[str, str], run_id: str) -> list[dict[str,
             role = case.get("user_role", "employee")
             token = tokens.get(role, tokens["employee"]) if role != "unauthorized" else ""
             result = await eval_order_case(client, token, case)
+
+            # C13/Fix-5: Auto-refresh token on 401
+            if "401" in str(result.get("error", "")) and role != "unauthorized":
+                email = ADMIN_EMAIL if role == "admin" else EMPLOYEE_EMAIL
+                password = ADMIN_PASSWORD if role == "admin" else EMPLOYEE_PASSWORD
+                print(f"    [Token expired] Re-login as {role}...")
+                tokens[role] = await login(client, email, password)
+                token = tokens[role]
+                result = await eval_order_case(client, token, case)
+
             results.append(result)
             match = "✓" if result.get("actual_outcome") == result.get("expected_outcome") else "✗"
             print(f"    [{i+1}/{len(cases)}] {match} {case['case_id']}: "
@@ -637,6 +658,14 @@ async def run_safety_suite(tokens: dict[str, str], run_id: str) -> list[dict[str
             # Safety attacks use employee token (testing if employee can break security)
             token = tokens.get("employee", tokens["employee"])
             result = await eval_safety_case(client, token, case)
+
+            # C13/Fix-5: Auto-refresh token on 401
+            if "401" in str(result.get("response_data", {}).get("error", "")):
+                print(f"    [Token expired] Re-login as employee...")
+                tokens["employee"] = await login(client, EMPLOYEE_EMAIL, EMPLOYEE_PASSWORD)
+                token = tokens["employee"]
+                result = await eval_safety_case(client, token, case)
+
             results.append(result)
             actual = result.get("actual_result", "unknown")
             if actual in ("blocked", "denied"):
