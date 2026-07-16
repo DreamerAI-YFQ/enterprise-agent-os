@@ -1158,7 +1158,7 @@ class LangGraphRunnerImpl:
 
         yield AgentEvent(
             type="final",
-            content=final_output,
+            content=self._sanitize_output(final_output),
             agent_id=ctx.agent_id,
         )
 
@@ -1238,7 +1238,7 @@ class LangGraphRunnerImpl:
 
         yield AgentEvent(
             type="final",
-            content=final_output,
+            content=self._sanitize_output(final_output),
             agent_id=ctx.agent_id,
         )
 
@@ -1329,6 +1329,68 @@ class LangGraphRunnerImpl:
         if current < len(steps):
             return steps[current]
         return {}
+
+    @staticmethod
+    def _sanitize_output(output: str | None) -> str | None:
+        """Filter sensitive DB schema info from agent output (SAF-004 fix).
+
+        Detects database structure patterns (SQL DDL, column type
+        declarations, table.column references, sensitive field name lists)
+        and replaces them with a redaction notice.
+        """
+        if not output:
+            return output
+
+        import re
+
+        sanitized = output
+
+        # 1. Detect SQL DDL statements
+        ddl_pattern = re.compile(
+            r"(CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+INDEX|INSERT\s+INTO|"
+            r"UPDATE\s+\w+\s+SET|DELETE\s+FROM|SELECT\s+.*\s+FROM)",
+            re.IGNORECASE,
+        )
+        if ddl_pattern.search(sanitized):
+            lines = sanitized.split("\n")
+            filtered_lines = []
+            for line in lines:
+                if ddl_pattern.search(line):
+                    filtered_lines.append("[已过滤: SQL语句]")
+                else:
+                    filtered_lines.append(line)
+            sanitized = "\n".join(filtered_lines)
+
+        # 2. Detect column type declarations (e.g., "id UUID NOT NULL")
+        col_type_pattern = re.compile(
+            r"\b\w+\s+(UUID|VARCHAR\(\d+\)|TEXT|TIMESTAMPTZ|INTEGER|"
+            r"BIGSERIAL|JSONB|NUMERIC\([\d,]+\)|BOOLEAN|BIGINT)\b"
+            r"(?:\s+(?:NOT\s+NULL|NULL|DEFAULT|PRIMARY|UNIQUE|REFERENCES))*",
+            re.IGNORECASE,
+        )
+        if col_type_pattern.search(sanitized):
+            sanitized = col_type_pattern.sub("[已过滤: 字段定义]", sanitized)
+
+        # 3. Detect table.column references (e.g., "agent.messages")
+        table_col_pattern = re.compile(
+            r"\b(agent|harness|trace|knowledge|iam|erp|audit)\.\w+"
+        )
+        sanitized = table_col_pattern.sub("[表名.列]", sanitized)
+
+        # 4. Detect sensitive field name lists (3+ comma-separated
+        #    snake_case identifiers containing known sensitive fields)
+        sensitive_fields = {
+            "idempotency_key", "approver_id", "before_state", "after_state",
+            "rolled_back", "rollback_reason", "trace_id", "span_id",
+            "parent_span_id", "cost_tokens", "cost_usd", "tenant_id",
+        }
+        word_list_pattern = re.compile(r"[\w]+(?:\s*,\s*[\w]+){2,}")
+        for match in word_list_pattern.finditer(sanitized):
+            fields_in_match = {f.strip().lower() for f in match.group().split(",")}
+            if fields_in_match & sensitive_fields:
+                sanitized = sanitized.replace(match.group(), "[已过滤: 敏感字段列表]")
+
+        return sanitized
 
     @staticmethod
     def _translate_event(

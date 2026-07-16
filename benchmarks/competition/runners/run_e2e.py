@@ -194,11 +194,14 @@ async def demo_b_order_loop() -> dict[str, Any]:
         admin_headers = {"Authorization": f"Bearer {admin_token}"}
         employee_headers = {"Authorization": f"Bearer {employee_token}"}
 
-        # Step 1: Employee requests high-value order
-        print("\n[Step 1] Employee requests high-value order (qty=200)...")
-        order_msg = "创建销售订单：客户 CUS-001，产品 PRD-001，数量 200，单价 5000"
+        # Step 1: Admin requests high-value order (triggers approval)
+        # C13/Fix-B: Use admin (not employee) so write permission is granted
+        # and the full approval→write→audit→rollback chain can be exercised.
+        # C13/Fix-B3: Use real customer code / product sku from erp tables.
+        print("\n[Step 1] Admin requests high-value order (qty=200)...")
+        order_msg = "创建销售订单：客户 CUS-TECH-0001，产品 PRD-ELEC-001，数量 200，单价 5000"
         # Don't pass session_id — let API create a new session automatically
-        sse = await invoke_agent_sse(client, employee_token, order_msg)
+        sse = await invoke_agent_sse(client, admin_token, order_msg)
         step1: dict[str, Any] = {"step": 1, "name": "request_order"}
         output = sse["final_content"] or ""
         step1["agent_response"] = output
@@ -278,15 +281,22 @@ async def demo_b_order_loop() -> dict[str, Any]:
         )
         step3: dict[str, Any] = {"step": 3, "name": "verify_audit"}
         if resp.status_code == 200:
-            audit_entries = resp.json()
+            body = resp.json()
+            # C13/Fix-B3: audit-logs returns {"items": [...], "total": N, ...}
+            audit_entries = body.get("items", body) if isinstance(body, dict) else body
             if isinstance(audit_entries, list):
                 # Check if any audit entry matches our operation
                 write_audits = [a for a in audit_entries if "write" in str(a.get("operation", "")).lower()
-                               or "create" in str(a.get("operation", "")).lower()]
+                               or "create" in str(a.get("operation", "")).lower()
+                               or "write" in str(a.get("action", "")).lower()]
                 step3["status"] = "ok" if len(audit_entries) > 0 else "partial"
                 step3["audit_count"] = len(audit_entries)
                 step3["write_audit_count"] = len(write_audits)
-                print(f"  ✓ Audit entries found: {len(audit_entries)} total, {len(write_audits)} writes")
+                if len(audit_entries) == 0:
+                    step3["note"] = "No audit entries found"
+                    print(f"  ~ No audit entries found")
+                else:
+                    print(f"  ✓ Audit entries found: {len(audit_entries)} total, {len(write_audits)} writes")
             else:
                 step3["status"] = "partial"
                 step3["note"] = "Unexpected audit response format"
@@ -299,7 +309,8 @@ async def demo_b_order_loop() -> dict[str, Any]:
 
         # Step 4: Test idempotency (resubmit same request)
         print("\n[Step 4] Test idempotency (resubmit same order)...")
-        sse2 = await invoke_agent_sse(client, employee_token, order_msg)
+        # C13/Fix-B: Use admin (same as Step 1) for consistency
+        sse2 = await invoke_agent_sse(client, admin_token, order_msg)
         step4: dict[str, Any] = {"step": 4, "name": "idempotency"}
         output2 = sse2["final_content"] or ""
         step4["agent_response"] = output2

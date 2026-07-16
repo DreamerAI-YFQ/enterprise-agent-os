@@ -82,6 +82,7 @@ async def invoke_agent_sse(
     message: str,
     *,
     extra_payload: dict[str, Any] | None = None,
+    max_retries: int = 3,
 ) -> dict[str, Any]:
     """POST /api/invoke and parse the SSE stream.
 
@@ -91,6 +92,9 @@ async def invoke_agent_sse(
       - events: list[dict]         (all parsed events)
       - error: str | None          (error event content or request error)
       - status_code: int           (HTTP status code)
+
+    Includes exponential backoff retry for 429/503 (LLM rate limit) errors.
+    Timeout reduced from 120s to 60s to avoid hanging on rate-limited requests.
     """
     headers = {"Authorization": f"Bearer {token}"}
     payload: dict[str, Any] = {
@@ -108,42 +112,68 @@ async def invoke_agent_sse(
         "status_code": 0,
     }
 
-    try:
-        async with client.stream(
-            "POST",
-            f"{API_BASE}/api/invoke",
-            headers=headers,
-            json=payload,
-            timeout=120,
-        ) as resp:
-            result["status_code"] = resp.status_code
-            if resp.status_code != 200:
-                body = await resp.aread()
-                result["error"] = f"HTTP {resp.status_code}: {body.decode('utf-8', errors='replace')[:200]}"
-                return result
+    for attempt in range(max_retries + 1):
+        result = {
+            "final_content": None,
+            "tool_results": [],
+            "events": [],
+            "error": None,
+            "status_code": 0,
+        }
+        try:
+            async with client.stream(
+                "POST",
+                f"{API_BASE}/api/invoke",
+                headers=headers,
+                json=payload,
+                timeout=60,  # C13/Fix-4: reduced from 120s to avoid hanging
+            ) as resp:
+                result["status_code"] = resp.status_code
+                if resp.status_code == 429 or resp.status_code == 503:
+                    # LLM rate limited — retry with exponential backoff
+                    if attempt < max_retries:
+                        wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                        await asyncio.sleep(wait)
+                        continue
+                    body = await resp.aread()
+                    result["error"] = f"HTTP {resp.status_code} (rate limited after {max_retries} retries): {body.decode('utf-8', errors='replace')[:200]}"
+                    return result
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    result["error"] = f"HTTP {resp.status_code}: {body.decode('utf-8', errors='replace')[:200]}"
+                    return result
 
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-                try:
-                    event = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-                result["events"].append(event)
-                etype = event.get("type", "")
-                if etype == "final":
-                    result["final_content"] = event.get("content", "")
-                elif etype == "error":
-                    result["error"] = event.get("content", "unknown error")
-                elif etype in ("tool_result", "tool_call"):
-                    # Runner emits "tool_call" events (not "tool_result") with
-                    # metadata containing the tool's output. Collect both types.
-                    result["tool_results"].append(event.get("metadata") or {})
-    except Exception as e:
-        result["error"] = str(e)[:300]
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    result["events"].append(event)
+                    etype = event.get("type", "")
+                    if etype == "final":
+                        result["final_content"] = event.get("content", "")
+                    elif etype == "error":
+                        result["error"] = event.get("content", "unknown error")
+                    elif etype in ("tool_result", "tool_call"):
+                        result["tool_results"].append(event.get("metadata") or {})
+                # Success — return result
+                return result
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            if attempt < max_retries:
+                wait = 2 ** (attempt + 1)
+                await asyncio.sleep(wait)
+                result["error"] = f"retry {attempt + 1}/{max_retries}: {str(e)[:200]}"
+                continue
+            result["error"] = str(e)[:300]
+            return result
+        except Exception as e:
+            result["error"] = str(e)[:300]
+            return result
 
     return result
 
@@ -304,6 +334,8 @@ async def run_rag_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, A
             results.append(result)
             status = "OK" if result.get("actual_status") == "ok" else "ERR"
             print(f"    [{i+1}/{len(cases)}] [{status}] {case['case_id']}: {case['query'][:40]}...")
+            # C13/Fix-4: Rate-limit requests to avoid LLM 429
+            await asyncio.sleep(1)
 
     # Save results
     results_dir = RESULTS_DIR / run_id
@@ -446,6 +478,8 @@ async def run_order_suite(tokens: dict[str, str], run_id: str) -> list[dict[str,
             match = "✓" if result.get("actual_outcome") == result.get("expected_outcome") else "✗"
             print(f"    [{i+1}/{len(cases)}] {match} {case['case_id']}: "
                   f"expected={result.get('expected_outcome')} actual={result.get('actual_outcome')}")
+            # C13/Fix-4: Rate-limit requests to avoid LLM 429
+            await asyncio.sleep(1)
 
     results_dir = RESULTS_DIR / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -612,6 +646,8 @@ async def run_safety_suite(tokens: dict[str, str], run_id: str) -> list[dict[str
             else:
                 match = f"? {actual}"
             print(f"    [{i+1}/{len(cases)}] {match} {case['case_id']}: {case.get('attack_type', '')}")
+            # C13/Fix-4: Rate-limit requests to avoid LLM 429
+            await asyncio.sleep(1)
 
     results_dir = RESULTS_DIR / run_id
     results_dir.mkdir(parents=True, exist_ok=True)

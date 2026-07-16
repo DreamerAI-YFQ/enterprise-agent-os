@@ -8,6 +8,7 @@ access_mode enforcement. Fixes gaps #1, #6, #7, #8.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from eaos.data.connector import (
     DataResource,
@@ -19,8 +20,6 @@ from eaos.data.connector import (
 )
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from eaos.infra.db.base import DbClient
 
 _RESOURCES: list[DataResource] = [
@@ -137,7 +136,24 @@ class ErpConnector:
             return
         data = operation.data
 
-        # Resolve customer_code → customer_id
+        # C13/Fix-B3: LLM may pass customer_id/product_id with code/sku values
+        # (not UUIDs). Detect non-UUID values and re-route to code/sku lookup.
+        def _is_uuid_str(v: object) -> bool:
+            if not isinstance(v, str):
+                return False
+            try:
+                UUID(v)
+                return True
+            except (ValueError, AttributeError, TypeError):
+                return False
+
+        # Normalize: if customer_id holds a non-UUID value, treat it as code.
+        if "customer_id" in data and not _is_uuid_str(data["customer_id"]):
+            data["customer_code"] = data.pop("customer_id")
+        if "product_id" in data and not _is_uuid_str(data["product_id"]):
+            data["product_sku"] = data.pop("product_id")
+
+        # Resolve customer_code → customer_id (UUID lookup from erp.customers)
         if "customer_code" in data and "customer_id" not in data:
             code = data.pop("customer_code")
             row = await self._db.fetch_one(
@@ -146,12 +162,19 @@ class ErpConnector:
                 tenant_id, code,
             )
             if row is None:
+                # Fallback: try LIKE match (e.g. CUS-001 → CUS-TECH-0001)
+                row = await self._db.fetch_one(
+                    "SELECT id FROM erp.customers "
+                    "WHERE tenant_id = :p0 AND code LIKE :p1 LIMIT 1",
+                    tenant_id, f"%{code}%",
+                )
+            if row is None:
                 data["customer_id"] = None
                 data["_error"] = f"customer not found: {code}"
                 return
             data["customer_id"] = str(row["id"])
 
-        # Resolve product_sku → product_id
+        # Resolve product_sku → product_id (UUID lookup from erp.products)
         if "product_sku" in data and "product_id" not in data:
             sku = data.pop("product_sku")
             row = await self._db.fetch_one(
@@ -159,6 +182,13 @@ class ErpConnector:
                 "WHERE tenant_id = :p0 AND sku = :p1 LIMIT 1",
                 tenant_id, sku,
             )
+            if row is None:
+                # Fallback: try LIKE match (e.g. PRD-001 → PRD-ELEC-001)
+                row = await self._db.fetch_one(
+                    "SELECT id, unit_price FROM erp.products "
+                    "WHERE tenant_id = :p0 AND sku LIKE :p1 LIMIT 1",
+                    tenant_id, f"%{sku}%",
+                )
             if row is None:
                 data["product_id"] = None
                 data["_error"] = f"product not found: {sku}"
@@ -254,11 +284,15 @@ class ErpConnector:
         allowed_cols = self._ALLOWED_COLUMNS.get(resource, set())
 
         if operation.operation == "create":
-            cols = list(operation.data.keys())
-            if not cols:
-                raise ValueError("create requires at least one column")
-            if not all(c in allowed_cols for c in cols):
-                raise ValueError("disallowed column in create data")
+            # C13/Fix-B2: Filter out disallowed columns instead of rejecting
+            # the entire request. LLM-generated data may include extra fields
+            # (e.g., total_amount, notes) that aren't in the whitelist.
+            filtered_data = {
+                k: v for k, v in operation.data.items() if k in allowed_cols
+            }
+            if not filtered_data:
+                raise ValueError("create requires at least one allowed column")
+            cols = list(filtered_data.keys())
             # tenant_id always first param; then data values
             col_list = ", ".join(["tenant_id"] + cols)
             placeholders = ", ".join(f":p{i}" for i in range(len(cols) + 1))
@@ -266,7 +300,7 @@ class ErpConnector:
                 f"INSERT INTO {self.SCHEMA}.{resource} ({col_list}) "
                 f"VALUES ({placeholders})"
             )
-            params: list[Any] = [tenant_id, *operation.data.values()]
+            params: list[Any] = [tenant_id, *filtered_data.values()]
             return sql, params
 
         if operation.operation == "update":

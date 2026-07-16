@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4  # noqa: TC003 — Pydantic needs UUID at runtime
@@ -24,9 +25,10 @@ from eaos.agent.runner import AgentEvent  # noqa: TC002 — runtime for error ev
 from eaos.core.auth import Principal  # noqa: TC002
 from eaos.core.context import TenantContext
 from eaos.core.errors import PermissionDeniedError
-from eaos.gateway.api.deps import get_db, get_orchestrator, get_principal, get_runner
+from eaos.gateway.api.deps import get_db, get_orchestrator, get_principal, get_runner, get_tracer
 from eaos.gateway.api.routes.multimodal_loader import load_attachment
 from eaos.infra.llm.base import Attachment  # noqa: TC002
+from eaos.observability.span import Granularity  # noqa: TC002
 from fastapi import APIRouter, Depends, HTTPException, Request  # noqa: TC002
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
     from eaos.agent.orchestrator import AgentOrchestratorImpl
     from eaos.agent.runner import AgentRunner
     from eaos.infra.db.base import DbClient
+    from eaos.observability.tracer import Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +190,7 @@ async def invoke(
     runner: AgentRunner = Depends(get_runner),  # noqa: B008
     orchestrator: AgentOrchestratorImpl = Depends(get_orchestrator),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
+    tracer: Tracer = Depends(get_tracer),  # noqa: B008
 ) -> StreamingResponse:
     """Stream agent execution events as SSE.
 
@@ -261,26 +265,37 @@ async def invoke(
 
     async def event_stream() -> AsyncIterator[str]:
         final_content: str | None = None
+        # Trace the agent invocation (persisted to trace.spans for observability)
+        span_cm = asynccontextmanager(tracer.span)
         try:
-            # C12/GAP-01: Route through Orchestrator for multi-agent support.
-            # Orchestrator analyzes the task and decides:
-            # - SINGLE → delegates to AgentRunner (same as before)
-            # - RELAY/FAN_OUT_IN/DEBATE/HIERARCHICAL → multi-agent collaboration
-            # Attachments are only supported in SINGLE mode (passed to runner).
-            if attachments:
-                # Attachments require direct runner access (Orchestrator doesn't support them)
-                stream = runner.invoke(
-                    ctx,
-                    body.message,
-                    attachments=attachments or None,
-                )
-            else:
-                # C12: Use Orchestrator for all text-only invocations
-                stream = orchestrator.execute(ctx, body.message)
-            async for event in stream:
-                if event.type == "final" and event.content:
-                    final_content = event.content
-                yield f"data: {_serialize_event(event)}\n\n"
+            async with span_cm(
+                "agent.invoke",
+                Granularity.TASK,
+                ctx,
+                agent_id=str(ctx.agent_id),
+                session_id=str(ctx.session_id) if ctx.session_id else None,
+                user_id=str(ctx.user_id) if ctx.user_id else None,
+            ) as span_handle:
+                # C12/GAP-01: Route through Orchestrator for multi-agent support.
+                # Orchestrator analyzes the task and decides:
+                # - SINGLE → delegates to AgentRunner (same as before)
+                # - RELAY/FAN_OUT_IN/DEBATE/HIERARCHICAL → multi-agent collaboration
+                # Attachments are only supported in SINGLE mode (passed to runner).
+                if attachments:
+                    # Attachments require direct runner access (Orchestrator doesn't support them)
+                    stream = runner.invoke(
+                        ctx,
+                        body.message,
+                        attachments=attachments or None,
+                    )
+                else:
+                    # C12: Use Orchestrator for all text-only invocations
+                    stream = orchestrator.execute(ctx, body.message)
+                async for event in stream:
+                    if event.type == "final" and event.content:
+                        final_content = event.content
+                        span_handle.set_attribute("final_content_length", len(event.content))
+                    yield f"data: {_serialize_event(event)}\n\n"
         except PermissionDeniedError as exc:
             yield f"data: {_error_event(exc)}\n\n"
         # Best-effort: persist the assistant's final response.

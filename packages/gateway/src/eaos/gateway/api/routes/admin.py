@@ -241,6 +241,44 @@ async def list_audit_logs(
         *page_params,
     )
     items = [_serialize_audit_row(r) for r in rows] if rows else []
+
+    # C13/Fix-B3: Fallback to harness.write_audit if audit_logs is empty.
+    # WritePipeline logs to write_audit (Phase 7 T7), not audit_logs.
+    if not items:
+        wa_rows = await db.fetch(
+            "SELECT id, tool_name AS action, resource AS resource_type, "
+            "operation, success, error, rolled_back, created_at "
+            "FROM harness.write_audit WHERE tenant_id = :p0 "
+            "ORDER BY created_at DESC LIMIT :p1 OFFSET :p2",
+            principal.tenant_id,
+            limit,
+            offset,
+        )
+        if wa_rows:
+            for r in wa_rows:
+                item = {
+                    "id": str(r["id"]),
+                    "actor_type": "agent",
+                    "actor_id": None,
+                    "action": str(r.get("action", "")),
+                    "resource_type": str(r.get("resource_type", "")),
+                    "resource_id": None,
+                    "detail": {
+                        "operation": r.get("operation"),
+                        "success": r.get("success"),
+                        "error": r.get("error"),
+                        "rolled_back": r.get("rolled_back"),
+                    },
+                    "ip_address": None,
+                    "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+                }
+                items.append(item)
+            count_row = await db.fetch_one(
+                "SELECT COUNT(*) AS cnt FROM harness.write_audit WHERE tenant_id = :p0",
+                principal.tenant_id,
+            )
+            total = int(count_row["cnt"]) if count_row else 0
+
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
