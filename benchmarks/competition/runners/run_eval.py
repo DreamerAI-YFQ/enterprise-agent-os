@@ -327,8 +327,31 @@ async def run_rag_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, A
     print(f"  Doc ID map: {len(doc_id_map)} documents loaded")
 
     results: list[dict[str, Any]] = []
+    results_dir = RESULTS_DIR / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    results_file = results_dir / "rag_results.jsonl"
+
+    # C13/Fix-6: Incremental save + resume support.
+    # Load any previously saved results so we can resume after interruption.
+    completed_ids: set[str] = set()
+    if results_file.exists():
+        with open(results_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        prev = json.loads(line)
+                        results.append(prev)
+                        completed_ids.add(prev.get("case_id", ""))
+                    except json.JSONDecodeError:
+                        continue
+        if completed_ids:
+            print(f"  [Resume] {len(completed_ids)} cases already done, continuing from there...")
+
     async with httpx.AsyncClient(timeout=300) as client:
         for i, case in enumerate(cases):
+            if case.get("case_id") in completed_ids:
+                continue
             role = case.get("user_role", "employee")
             token = tokens.get(role, tokens["employee"])
             result = await eval_rag_case(client, token, case, doc_id_map=doc_id_map)
@@ -343,18 +366,15 @@ async def run_rag_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, A
                 result = await eval_rag_case(client, token, case, doc_id_map=doc_id_map)
 
             results.append(result)
+            # Incremental save: append to file after each case (crash-safe)
+            with open(results_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
             status = "OK" if result.get("actual_status") == "ok" else "ERR"
             print(f"    [{i+1}/{len(cases)}] [{status}] {case['case_id']}: {case['query'][:40]}...")
             # C13/Fix-4: Rate-limit requests to avoid LLM 429
             await asyncio.sleep(1)
 
-    # Save results
-    results_dir = RESULTS_DIR / run_id
-    results_dir.mkdir(parents=True, exist_ok=True)
-    results_file = results_dir / "rag_results.jsonl"
-    with open(results_file, "w", encoding="utf-8") as f:
-        for r in results:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"  Results saved: {results_file}")
 
     # Compute metrics
