@@ -52,11 +52,19 @@ class OpenAIEmbedder:
         """Embed a single text. Returns a float vector of length `dimension`."""
         client = self._get_client()
         try:
-            response = await client.embeddings.create(
-                input=text,
-                model=self._config.model,
-                dimensions=self._config.dimensions,
-            )
+            try:
+                response = await client.embeddings.create(
+                    input=text,
+                    model=self._config.model,
+                    dimensions=self._config.dimensions,
+                )
+            except openai.BadRequestError:
+                # Some providers (e.g. SiliconFlow BAAI/bge-m3) don't accept
+                # the dimensions param — retry without it.
+                response = await client.embeddings.create(
+                    input=text,
+                    model=self._config.model,
+                )
         except openai.OpenAIError as exc:
             raise LLMError(f"embedding call failed: {exc}") from exc
         return response.data[0].embedding
@@ -67,11 +75,17 @@ class OpenAIEmbedder:
             return []
         client = self._get_client()
         try:
-            response = await client.embeddings.create(
-                input=texts,
-                model=self._config.model,
-                dimensions=self._config.dimensions,
-            )
+            try:
+                response = await client.embeddings.create(
+                    input=texts,
+                    model=self._config.model,
+                    dimensions=self._config.dimensions,
+                )
+            except openai.BadRequestError:
+                response = await client.embeddings.create(
+                    input=texts,
+                    model=self._config.model,
+                )
         except openai.OpenAIError as exc:
             raise LLMError(f"embedding batch call failed: {exc}") from exc
         # API returns data sorted by index; sort defensively to preserve order.
