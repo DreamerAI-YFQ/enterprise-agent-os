@@ -64,6 +64,8 @@ def _mock_harness() -> Any:
 def _mock_approval_gate() -> Any:
     ag: Any = MagicMock()
     ag.request_approval = AsyncMock(return_value=uuid4())
+    # C13/Fix-3: WritePipeline now verifies approval status via check_approval
+    ag.check_approval = AsyncMock(return_value="approved")
     return ag
 
 
@@ -182,7 +184,13 @@ class TestComponentWiring:
         result = WriteResult(
             success=False, before=before, error="constraint violation"
         )
-        pipe, mocks = _make_write_pipeline(connector=_mock_connector(result))
+        connector = _mock_connector(result)
+        # C09: _verify_record_matches calls connector.read to verify rollback;
+        # return a row matching the before snapshot so verification passes.
+        connector.read = AsyncMock(
+            return_value=MagicMock(rows=[before], total=1)
+        )
+        pipe, mocks = _make_write_pipeline(connector=connector)
 
         outcome = await pipe.execute(_write_intent(operation="update", record_id="ord-001"))
 

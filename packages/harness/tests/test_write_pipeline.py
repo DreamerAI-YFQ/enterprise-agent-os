@@ -62,6 +62,8 @@ def _mock_audit_logger() -> Any:
 def _mock_approval_gate() -> Any:
     ag: Any = MagicMock()
     ag.request_approval = AsyncMock(return_value=uuid4())
+    # C13/Fix-3: WritePipeline now verifies approval status via check_approval
+    ag.check_approval = AsyncMock(return_value="approved")
     return ag
 
 
@@ -220,9 +222,11 @@ class TestWriteFailure:
         conn.rollback = AsyncMock(side_effect=RuntimeError("rollback also failed"))
         pipe, _ = _make_pipeline(connector=conn)
         outcome = await pipe.execute(_intent(operation="update", record_id="123"))
-        # Original error should be preserved
+        # Original error should be preserved (not masked by rollback failure)
         assert outcome.error == "original error"
-        assert outcome.rolled_back is True
+        # C09: rolled_back is True only if rollback succeeded; here it failed
+        assert outcome.rolled_back is False
+        assert outcome.rollback_error == "rollback also failed"
 
 
 class TestAuditFields:

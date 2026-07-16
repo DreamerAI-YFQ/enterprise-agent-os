@@ -73,7 +73,10 @@ class TestSearch:
         deps["rag"].retrieve.return_value = [_make_chunk("result")]
         await engine.search("query", TID, top_k=5)
         deps["rewriter"].rewrite.assert_awaited_once_with("query", TID)
-        deps["rag"].retrieve.assert_awaited_once_with("expanded query", TID, top_k=5)
+        # C05: search now passes user_id and department_ids to retrieve
+        deps["rag"].retrieve.assert_awaited_once_with(
+            "expanded query", TID, top_k=5, user_id=None, department_ids=None
+        )
 
     async def test_returns_search_results(self) -> None:
         engine, deps = _make_engine()
@@ -84,7 +87,8 @@ class TestSearch:
         assert all(isinstance(r, SearchResult) for r in result)
         assert result[0].content == "a"
         assert result[0].source == "rag"
-        assert result[0].score == 1.0
+        # C05: score comes from chunk's RRF score (default 0.0, not hardcoded 1.0)
+        assert result[0].score == 0.0
 
     async def test_empty_results(self) -> None:
         engine, deps = _make_engine()
@@ -97,13 +101,16 @@ class TestSearch:
         engine, deps = _make_engine()
         deps["rewriter"].rewrite.return_value = _rewritten_query()
         chunk = _make_chunk("x")
+        doc_id = uuid4()
         chunk = Chunk(
-            id=chunk.id, document_id=chunk.document_id, tenant_id=chunk.tenant_id,
+            id=chunk.id, document_id=doc_id, tenant_id=chunk.tenant_id,
             chunk_index=0, content="x", token_count=1, metadata={"key": "val"},
         )
         deps["rag"].retrieve.return_value = [chunk]
         result = await engine.search("q", TID)
-        assert result[0].metadata == {"key": "val"}
+        # C13/Fix-A: document_id is injected into metadata for citation/eval
+        assert result[0].metadata["key"] == "val"
+        assert result[0].metadata["document_id"] == str(doc_id)
 
 
 class TestIngestDocument:

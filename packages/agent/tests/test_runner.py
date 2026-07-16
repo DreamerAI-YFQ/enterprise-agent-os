@@ -70,6 +70,10 @@ def _make_runner(
 
     skill_resolver = AsyncMock()
     skill_resolver.resolve_for_agent.return_value = []
+    # C13/Fix-8: _understand calls resolve_for_user (not resolve_for_agent);
+    # default AsyncMock return value is a non-serializable MagicMock, which
+    # breaks LangGraph's MemorySaver checkpointing. Must return a real list.
+    skill_resolver.resolve_for_user.return_value = []
 
     skill_executor = AsyncMock()
 
@@ -141,6 +145,10 @@ class TestRagPath:
                         {"steps": [{"id": 0, "action": "rag", "args": {"query": "manual"}}]}
                     )
                 ),
+                # C13/Fix-8: reflect needs an LLM response to decide done
+                _llm_response(json.dumps({"done": True, "reason": "sufficient data"})),
+                # direct_node synthesizes final answer from RAG observations
+                _llm_response("Based on the documents, here is the answer."),
             ],
             search_results=search_results,
         )
@@ -396,6 +404,10 @@ class TestMemoryRecall:
         memory_engine.recall.return_value = [memory]
         memory_engine.consolidate_session.return_value = []
 
+        skill_resolver = AsyncMock()
+        # C13/Fix-8: resolve_for_user must return a serializable list, not MagicMock
+        skill_resolver.resolve_for_user.return_value = []
+
         dispatcher = AsyncMock()
         dispatcher.get.return_value = config
         tenant_manager = AsyncMock()
@@ -403,7 +415,7 @@ class TestMemoryRecall:
 
         runner = LangGraphRunnerImpl(
             llm=llm,
-            skill_resolver=AsyncMock(),
+            skill_resolver=skill_resolver,
             skill_executor=AsyncMock(),
             knowledge_engine=AsyncMock(),
             mcp_server=AsyncMock(),

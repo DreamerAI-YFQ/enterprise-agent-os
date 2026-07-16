@@ -19,6 +19,8 @@ def _make_components() -> tuple[Any, Any, Any]:
     embedder.embed = AsyncMock(return_value=[0.1] * 8)
     db: Any = MagicMock()
     db.tenant_scoped_fetch = AsyncMock()
+    # C05: _fetch_chunks uses db.fetch (not tenant_scoped_fetch) for chunk loading
+    db.fetch = AsyncMock()
     return vs, embedder, db
 
 
@@ -39,6 +41,8 @@ def _full_row(cid: UUID, content: str = "content") -> dict[str, Any]:
         "content": content,
         "token_count": 10,
         "metadata": {"page": 1},
+        "scope": "enterprise",
+        "owner_id": None,
     }
 
 
@@ -47,10 +51,8 @@ class TestRetrieve:
         vs, embedder, db = _make_components()
         c1 = uuid4()
         vs.search.return_value = [_vs_result(c1, 0.1)]
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(c1)],
-            [_full_row(c1)],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(c1)]
+        db.fetch.return_value = [_full_row(c1)]
         r = HybridRetriever(vs, embedder, db)
         await r.retrieve("query", TID, top_k=5)
         embedder.embed.assert_awaited_once_with("query")
@@ -72,10 +74,8 @@ class TestRetrieve:
             _vs_result(c2, 0.2),
             _vs_result(c3, 0.3),
         ]
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(c3), _bm25_row(c2)],
-            [_full_row(c1), _full_row(c2), _full_row(c3)],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(c3), _bm25_row(c2)]
+        db.fetch.return_value = [_full_row(c1), _full_row(c2), _full_row(c3)]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=3)
         ids = [c.id for c in result]
@@ -91,10 +91,8 @@ class TestRetrieve:
             _vs_result(c_vec_only, 0.1),
             _vs_result(c_both, 0.2),
         ]
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(c_bm25_only), _bm25_row(c_both)],
-            [_full_row(c_both), _full_row(c_vec_only), _full_row(c_bm25_only)],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(c_bm25_only), _bm25_row(c_both)]
+        db.fetch.return_value = [_full_row(c_both), _full_row(c_vec_only), _full_row(c_bm25_only)]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=3)
         assert result[0].id == c_both
@@ -103,10 +101,8 @@ class TestRetrieve:
         vs, embedder, db = _make_components()
         ids = [uuid4() for _ in range(5)]
         vs.search.return_value = [_vs_result(cid, 0.1 * i) for i, cid in enumerate(ids)]
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(cid) for cid in ids],
-            [_full_row(cid) for cid in ids],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(cid) for cid in ids]
+        db.fetch.return_value = [_full_row(cid) for cid in ids]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=3)
         assert len(result) == 3
@@ -115,19 +111,19 @@ class TestRetrieve:
         vs, embedder, db = _make_components()
         vs.search.return_value = []
         db.tenant_scoped_fetch.return_value = []
+        db.fetch.return_value = []
         r = HybridRetriever(vs, embedder, db)
         await r.retrieve("q", TID, top_k=5)
         call = vs.search.call_args
-        assert call.kwargs["top_k"] == 10
+        # C05: fetch_k = top_k * 3 (over-fetch to compensate for permission filtering)
+        assert call.kwargs["top_k"] == 15
 
     async def test_returns_chunk_objects_with_full_data(self) -> None:
         vs, embedder, db = _make_components()
         c1 = uuid4()
         vs.search.return_value = [_vs_result(c1, 0.1)]
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(c1)],
-            [_full_row(c1, content="full content")],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(c1)]
+        db.fetch.return_value = [_full_row(c1, content="full content")]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=1)
         assert len(result) == 1
@@ -152,10 +148,8 @@ class TestRetrieve:
         vs, embedder, db = _make_components()
         c_vec = uuid4()
         vs.search.return_value = [_vs_result(c_vec, 0.1)]
-        db.tenant_scoped_fetch.side_effect = [
-            [],
-            [_full_row(c_vec)],
-        ]
+        db.tenant_scoped_fetch.return_value = []
+        db.fetch.return_value = [_full_row(c_vec)]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=5)
         assert len(result) == 1
@@ -165,10 +159,8 @@ class TestRetrieve:
         vs, embedder, db = _make_components()
         c_bm = uuid4()
         vs.search.return_value = []
-        db.tenant_scoped_fetch.side_effect = [
-            [_bm25_row(c_bm)],
-            [_full_row(c_bm)],
-        ]
+        db.tenant_scoped_fetch.return_value = [_bm25_row(c_bm)]
+        db.fetch.return_value = [_full_row(c_bm)]
         r = HybridRetriever(vs, embedder, db)
         result = await r.retrieve("q", TID, top_k=5)
         assert len(result) == 1
