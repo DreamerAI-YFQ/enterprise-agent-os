@@ -1,251 +1,554 @@
 # Competition Claim Matrix
-# 每项能力主张必须闭合为：源码锚点 → 可复现运行入口 → 原始产物 → 量化指标 → 边界
-# 层级：L1源码存在 / L2组件可信 / L3主链闭合 / L4证据闭合
+# 每项能力主张必须闭合为：源码锚点 -> 可复现入口 -> 原始产物 -> 量化指标 -> 适用边界。
+# 成熟度：L1 源码存在 / L2 组件可信 / L3 主链闭合 / L4 冻结证据闭合。
+
+schema_version: "2.0"
+
+metadata:
+  updated_at: "2026-07-18"
+  team: "逐风破浪"
+  competition_track: "开放赛题一：生成式大语言模型与智能体"
+  project_stage: "ready_for_competition_document_planning"
+  readiness_note: >-
+    核心工程、两条主演示链和主要量化证据已经收束，可以进入项目命名、宏观叙事、
+    章节证据分配和图表清单设计；这不等于所有远期研究指标均已完成。
+  evidence_runtime:
+    primary_git_sha: "493885d9e77f6ad66902fcd68630f7518663b8ba"
+    primary_git_tag: "competition-rc-20260718-03"
+    retrieval_git_sha: "53290fd32d8dd397d4adbfebe85e3137451e0983"
+    retrieval_git_tag: "competition-rc-20260718-01"
+    llm_provider: "SiliconFlow"
+    llm_model: "deepseek-ai/DeepSeek-V4-Pro"
+    embedding_model: "BAAI/bge-m3"
+    embedding_dimension: 1024
+  frozen_evidence:
+    retrieval_run:
+      run_id: "retrieval-core-v1-rc-20260718-01"
+      formal_execution_gates_passed: true
+      source_tree_clean: true
+      artifact_manifest: "benchmarks/competition/results/retrieval-core-v1-rc-20260718-01/manifest.json"
+    verified_evidence_runs:
+      - "rag-answer-core-v1-rc-20260718-01"
+      - "order-core-v1-rc-20260718-03"
+      - "safety-rc-20260718-03"
+      - "demos-rc03-repeat-01"
+      - "demos-rc03-repeat-02"
+      - "demos-rc03-repeat-03"
+    evidence_verifier: "scripts/competition/verify_evidence.py"
+    verifier_status: "all_required_checks_passed"
+  post_run_baseline:
+    observed_at: "2026-07-18"
+    migration_head: "0018"
+    pending_approvals: 0
+    erp_orders: 15
+    unrolled_write_audits: 0
+    knowledge_documents:
+      gold: 60
+      base_distractors: 2
+      retained_demo_documents: 3
+      total: 65
+    knowledge_chunks:
+      gold: 288
+      retained_demo_chunks: 3
+      total: 297
+    retained_demo_contributions: 3
+  interpretation_rules:
+    - "L4 表示主张在明确范围内已有冻结运行证据，不表示无限范围或生产规模证明。"
+    - "诊断项不得包装为正式硬门；低于早期愿景目标的指标必须原样呈现。"
+    - "未形成独立冻结评测的能力最多列为 L3，不借用全量回归冒充竞赛证据。"
+    - "评测成本未取得可信价格映射时只报告 Token，不推算美元成本。"
+
+global_boundaries:
+  - "系统写入对象目前仅覆盖创建销售订单，外部业务系统为项目内隔离式模拟 ERP。"
+  - "检索 Core-48 的 Recall@5 和 nDCG@5 低于早期愿景目标，但不属于该冻结配置的硬门。"
+  - "知识主演示和订单主演示各连续复测 3 轮，足以支持可演示性，不代表大样本生产统计。"
+  - "销售订单工具目前统一标记为 high-risk，选择性审批策略尚未细分风险等级。"
+  - "历史会话和 Skill 已接入主链并通过回归，但没有各自独立的冻结竞赛评测。"
+  - "存量向量未在数据库中持久化 embedding model identity；冻结清单只绑定查询侧模型。"
 
 claims:
-  - claim_id: C-KNOW-01
-    statement: "员工可提交独有知识，管理员审核后幂等入库，另一授权用户可跨部门复用并引用来源"
-    level: 核心
-    current_maturity: L2
-    target_maturity: L4
-    boundary: "项目内隔离式模拟ERP/PostgreSQL；真实LLM+Embedding"
+  - claim_id: "C-KNOW-01"
+    statement: "员工提交独有知识后，在管理员审核、幂等索引和权限校验下转化为可被另一授权用户检索并带引用复用的组织知识。"
+    category: "核心"
+    current_maturity: "L4"
+    target_maturity: "L4"
+    status: "verified_with_scope"
+    owner: "逐风破浪"
+    reviewer: "frozen evaluator + evidence verifier"
     source_anchors:
-      - packages/gateway/src/eaos/gateway/api/routes/contributions.py
-      - packages/knowledge/src/eaos/knowledge/rag/pipeline.py
-      - packages/infra/src/eaos/infra/db/migrations/versions/0013_knowledge_contributions.py
-    dataset_version: "pending"
-    case_ids: []
-    run_ids: []
+      - "packages/gateway/src/eaos/gateway/api/routes/contributions.py"
+      - "packages/knowledge/src/eaos/knowledge/rag/pipeline.py"
+      - "packages/knowledge/src/eaos/knowledge/rag/retriever.py"
+      - "packages/agent/src/eaos/agent/runner.py"
+      - "packages/infra/src/eaos/infra/db/migrations/versions/0013_knowledge_contributions.py"
+    reproducible_entry:
+      command_template: "uv run python benchmarks/competition/runners/run_e2e.py --demo A --run-id <run_id>"
+      dataset_or_fixture: "每轮动态生成唯一 marker 与验证码，避免命中已有语料"
+    run_ids:
+      - "demos-rc03-repeat-01"
+      - "demos-rc03-repeat-02"
+      - "demos-rc03-repeat-03"
+    result_artifacts:
+      - "benchmarks/competition/results/demos-rc03-repeat-01/e2e_results.json"
+      - "benchmarks/competition/results/demos-rc03-repeat-02/e2e_results.json"
+      - "benchmarks/competition/results/demos-rc03-repeat-03/e2e_results.json"
+    evidence_artifacts:
+      - "artifacts/competition-evidence/demos-rc03-repeat-01/manifest.json"
+      - "artifacts/competition-evidence/demos-rc03-repeat-02/manifest.json"
+      - "artifacts/competition-evidence/demos-rc03-repeat-03/manifest.json"
     metrics:
-      - name: "审核后复用成功率"
-        threshold: ">=90%"
-        result: pending
-      - name: "审核前后配对提升"
-        threshold: ">=40pp, 95% CI下界>25pp"
-        result: pending
-      - name: "重复审核不产生重复Document"
-        threshold: "100%"
-        result: pending
+      - name: "端到端主演示通过率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "审核前不可检索"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "审核后跨用户精确检索并在聊天中引用"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "重复审核不产生重复 Document"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "三轮演示 Token 总量"
+        sample_size: 3
+        result: 24724
+        unit: "tokens"
+        status: "measured"
     g0_safety:
-      - "pending/rejected内容不可检索"
-      - "跨租户/跨部门权限隔离"
-    owner: pending
-    reviewer: pending
-    result: pending
-    limitations: []
-
-  - claim_id: C-RAG-01
-    statement: "Agent在聊天中选择RAG，权限前置检索+重排，基于证据回答并引用来源，无证据时拒答"
-    level: 核心
-    current_maturity: L1-L2
-    target_maturity: L4
-    boundary: "ILIKE词法匹配（非BM25）；固定语料150+查询"
-    source_anchors:
-      - packages/knowledge/src/eaos/knowledge/rag/retriever.py
-      - packages/knowledge/src/eaos/knowledge/engine.py
-      - packages/agent/src/eaos/agent/runner.py
-    dataset_version: "pending"
-    case_ids: []
-    run_ids: []
-    metrics:
-      - name: "Hit@5"
-        threshold: ">=95%"
-        result: pending
-      - name: "Recall@5"
-        threshold: ">=90%"
-        result: pending
-      - name: "nDCG@5"
-        threshold: ">=0.85"
-        result: pending
-      - name: "Answer Accuracy"
-        threshold: ">=85%"
-        result: pending
-      - name: "Faithfulness"
-        threshold: ">=90%"
-        result: pending
-      - name: "Citation Precision"
-        threshold: ">=95%"
-        result: pending
-      - name: "无答案拒答率"
-        threshold: ">=90%"
-        result: pending
-      - name: "跨租户泄漏"
-        threshold: "0"
-        result: pending
-    g0_safety:
-      - "无权限高分Chunk不进入候选集（不是Top-K后过滤）"
-      - "跨租户Canary在结果/答案/trace/日志中0次出现"
-    owner: pending
-    reviewer: pending
-    result: pending
+      - "pending 内容在审核前返回 0 条结果。"
+      - "检索和回答复用现有租户、部门与个人范围权限过滤。"
+      - "重复审核返回 409，且每项贡献只绑定一个 Document。"
     limitations:
-      - "当前score固定为1.0，需修复"
-      - "权限过滤可能在Top-K后执行"
+      - "连续复测为 3 轮，少于早期规划中的 5 轮。"
+      - "当前证明的是唯一短事实从贡献到复用的闭环，未覆盖大文件、版本冲突和批量审核吞吐。"
 
-  - claim_id: C-WORK-01
-    statement: "Agent理解自然语言订单请求，选择受控命令，确定性解析参数，经审批后写入模拟ERP"
-    level: 核心
-    current_maturity: L1
-    target_maturity: L4
-    boundary: "仅创建销售订单；项目内隔离式模拟ERP；180个独立任务"
+  - claim_id: "C-RAG-01"
+    statement: "Agent 使用真实 Embedding 完成权限约束的混合检索，并基于检索证据生成带有效引用的回答；无证据或无权限时明确拒答。"
+    category: "核心"
+    current_maturity: "L4"
+    target_maturity: "L4"
+    status: "verified_with_recorded_quality_boundaries"
+    owner: "逐风破浪"
+    reviewer: "frozen evaluator + evidence verifier"
     source_anchors:
-      - packages/data/src/eaos/data/mcp/registry.py
-      - packages/data/src/eaos/data/erp_connector.py
-      - packages/agent/src/eaos/agent/runner.py
-    dataset_version: "pending"
-    case_ids: []
-    run_ids: []
+      - "packages/knowledge/src/eaos/knowledge/rag/retriever.py"
+      - "packages/knowledge/src/eaos/knowledge/rag/pipeline.py"
+      - "packages/knowledge/src/eaos/knowledge/engine.py"
+      - "packages/agent/src/eaos/agent/runner.py"
+    reproducible_entries:
+      - name: "Retrieval Core-48"
+        command_template: "uv run python benchmarks/competition/runners/run_retrieval.py --profile core-v1 --run-id <run_id> --formal"
+        dataset: "benchmarks/competition/datasets/rag_queries_core_v1.yaml"
+      - name: "RAG Answer Core-16"
+        command_template: "uv run python benchmarks/competition/runners/run_eval.py --suite rag --rag-profile answer-core-v1 --run-id <run_id> --formal"
+        dataset: "benchmarks/competition/datasets/rag_answers_core_v1.yaml"
+    run_ids:
+      - "retrieval-core-v1-rc-20260718-01"
+      - "rag-answer-core-v1-rc-20260718-01"
+    result_artifacts:
+      - "benchmarks/competition/results/retrieval-core-v1-rc-20260718-01/manifest.json"
+      - "benchmarks/competition/results/retrieval-core-v1-rc-20260718-01/retrieval_metrics.json"
+      - "benchmarks/competition/results/rag-answer-core-v1-rc-20260718-01/rag_answer_metrics.json"
+      - "benchmarks/competition/results/rag-answer-core-v1-rc-20260718-01/rag_answer_results.jsonl"
+    evidence_artifacts:
+      - "artifacts/competition-evidence/rag-answer-core-v1-rc-20260718-01/manifest.json"
+      - "artifacts/competition-evidence/rag-answer-core-v1-rc-20260718-01/traces.jsonl"
+      - "artifacts/competition-evidence/rag-answer-core-v1-rc-20260718-01/usage.json"
     metrics:
-      - name: "决策/工具选择准确率"
-        threshold: ">=95%"
-        result: pending
-      - name: "参数严格准确率"
-        threshold: ">=90%"
-        result: pending
+      - name: "Retrieval Hit@5"
+        sample_size: 36
+        result: 0.972222
+        aspirational_reference: 0.95
+        status: "meets_reference"
+      - name: "Retrieval Recall@5"
+        sample_size: 36
+        result: 0.835714
+        aspirational_reference: 0.90
+        status: "below_aspirational_reference_not_a_frozen_hard_gate"
+      - name: "Retrieval nDCG@5"
+        sample_size: 36
+        result: 0.779986
+        aspirational_reference: 0.85
+        status: "below_aspirational_reference_not_a_frozen_hard_gate"
+      - name: "Retrieval MRR@5"
+        sample_size: 36
+        result: 0.815278
+        status: "measured"
+      - name: "Retrieval strict failures"
+        sample_size: 48
+        result: 0
+        status: "pass"
+      - name: "Retrieval 权限 Canary 命中数"
+        sample_size: 3
+        result: 0
+        status: "pass"
+      - name: "Retrieval 平均延迟"
+        sample_size: 48
+        result: 150.206
+        unit: "ms"
+        status: "measured_retrieval_only"
+      - name: "Answer Core 总体案例通过率"
+        sample_size: 16
+        result: 1.0
+        frozen_threshold: 0.80
+        status: "pass"
+      - name: "Answer Content Recall"
+        sample_size: 10
+        result: 0.985714
+        frozen_threshold: 0.80
+        status: "pass"
+      - name: "Citation Relevance Precision"
+        sample_size: 10
+        result: 0.954545
+        frozen_threshold: 0.80
+        status: "pass"
+      - name: "Citation Grounded Answer Rate"
+        sample_size: 10
+        result: 1.0
+        status: "pass"
+      - name: "无答案拒答准确率"
+        sample_size: 6
+        result: 1.0
+        frozen_threshold: 0.90
+        status: "pass"
+      - name: "权限零泄漏率"
+        sample_size: 3
+        result: 1.0
+        frozen_threshold: 1.0
+        status: "pass"
+      - name: "Answer Core 平均端到端延迟"
+        sample_size: 16
+        result: 39172.994
+        unit: "ms"
+        status: "measured"
+      - name: "Answer Core Token 总量"
+        sample_size: 16
+        result: 47577
+        unit: "tokens"
+        status: "measured"
+      - name: "Answer Core 美元成本"
+        result: null
+        status: "unavailable_no_trusted_price_mapping"
+    g0_safety:
+      - "租户、部门、个人范围在返回的每个 Chunk 上独立断言。"
+      - "跨租户、外部门和外个人 Canary 在检索与回答中均为零泄漏。"
+      - "运行结束后 Canary 文档、Chunk 和身份夹具残留均为 0。"
+    limitations:
+      - "Recall@5=0.835714、nDCG@5=0.779986，未达到早期 0.90/0.85 愿景值。"
+      - "Retrieval 的 12 个无正向金标案例不计入正向相关性指标；expected-empty retrieval accuracy 为 0.666667。"
+      - "存量向量未持久化 embedding model identity，清单只能绑定查询侧 BAAI/bge-m3。"
+      - "引用相关性是编号引用到返回金标文档的映射，不等同于开放域自然语言蕴含评分。"
+      - "Answer Core 平均端到端延迟约 39.2 秒，是当前演示环境的重要优化空间。"
+
+  - claim_id: "C-WORK-01"
+    statement: "Agent 可理解自然语言销售订单请求，选择受控工具并规范化参数，经审批后写入模拟 ERP，以数据库终态而非回答文本判定任务完成。"
+    category: "核心"
+    current_maturity: "L4"
+    target_maturity: "L4"
+    status: "verified_with_scope"
+    owner: "逐风破浪"
+    reviewer: "frozen evaluator + evidence verifier"
+    source_anchors:
+      - "packages/agent/src/eaos/agent/runner.py"
+      - "packages/data/src/eaos/data/mcp/registry.py"
+      - "packages/data/src/eaos/data/erp_connector.py"
+      - "packages/harness/src/eaos/harness/write_pipeline.py"
+    reproducible_entry:
+      command_template: "uv run python benchmarks/competition/runners/run_eval.py --suite order --order-profile core-v1 --run-id <run_id>"
+      dataset: "benchmarks/competition/datasets/order_tasks_core_v1.yaml"
+      evaluator: "order-state-machine-v2"
+      verdict_basis: "structured_events_plus_database_terminal_state"
+    run_ids:
+      - "order-core-v1-rc-20260718-03"
+      - "demos-rc03-repeat-01"
+      - "demos-rc03-repeat-02"
+      - "demos-rc03-repeat-03"
+    result_artifacts:
+      - "benchmarks/competition/results/order-core-v1-rc-20260718-03/order_metrics.json"
+      - "benchmarks/competition/results/order-core-v1-rc-20260718-03/order_results.jsonl"
+      - "benchmarks/competition/results/order-core-v1-rc-20260718-03/order_run_manifest.json"
+    evidence_artifacts:
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/manifest.json"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/traces.jsonl"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/approvals.jsonl"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/write_audit.jsonl"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/order_cleanup_receipt.json"
+    metrics:
+      - name: "Core-27 案例通过率"
+        sample_size: 27
+        result: 1.0
+        display: "27/27（100%）"
+        status: "pass"
       - name: "严格任务完成率"
-        threshold: ">=85%"
-        result: pending
-      - name: "合法高风险完成率"
-        threshold: ">=95%"
-        result: pending
+        sample_size: 27
+        result: 1.0
+        status: "pass"
+      - name: "结果准确率"
+        sample_size: 27
+        result: 1.0
+        status: "pass"
+      - name: "工具选择准确率"
+        sample_size: 27
+        result: 1.0
+        status: "pass"
+      - name: "审批中断验证率"
+        result: 1.0
+        status: "pass"
+      - name: "数据库终态验证率"
+        result: 1.0
+        status: "pass"
+      - name: "负向案例零业务副作用率"
+        result: 1.0
+        status: "pass"
+      - name: "Core-27 Token 总量"
+        sample_size: 27
+        result: 61563
+        unit: "tokens"
+        status: "measured"
     g0_safety:
-      - "审批前零写入"
-      - "重试零重复订单"
-      - "不开放任意SQL/任意表写入"
-    owner: pending
-    reviewer: pending
-    result: pending
+      - "未授权、跨租户、审批伪造和 SQL 注入案例均以数据库零副作用判定。"
+      - "业务基线在评测后恢复为 15 个订单，运行夹具残留为 0。"
+      - "工具参数先映射客户/产品主数据，再形成规范化写入意图。"
     limitations:
-      - "ToolRegistry当前无受控写工具"
-      - "WritePipeline未接入主链"
+      - "业务范围只覆盖创建销售订单，未覆盖采购、退货、开票等流程。"
+      - "ERP 为隔离式模拟系统，不声明已适配真实厂商 ERP。"
+      - "Core-27 是按 9 类各 3 例构造的平衡集，不代表真实生产流量分布。"
 
-  - claim_id: C-TRUST-01
-    statement: "高风险写入经管理员独立审批，服务端核验绑定，一次性恢复，审批不可伪造/重放/跨会话"
-    level: 核心
-    current_maturity: L1-L2
-    target_maturity: L4
-    boundary: "模拟ERP；审批绑定intent digest+idempotency key"
+  - claim_id: "C-TRUST-01"
+    statement: "高风险写入必须经过独立管理员审批；恢复执行由服务端绑定租户、会话、Agent、请求人和真实审批状态，审批不可伪造、重放或跨会话使用。"
+    category: "核心"
+    current_maturity: "L4"
+    target_maturity: "L4"
+    status: "verified_with_policy_boundary"
+    owner: "逐风破浪"
+    reviewer: "frozen evaluator + evidence verifier"
     source_anchors:
-      - packages/harness/src/eaos/harness/evolution/approval.py
-      - packages/harness/src/eaos/harness/write_pipeline.py
-      - packages/gateway/src/eaos/gateway/api/routes/admin.py
-    dataset_version: "pending"
-    case_ids: []
-    run_ids: []
+      - "packages/harness/src/eaos/harness/evolution/approval.py"
+      - "packages/harness/src/eaos/harness/write_pipeline.py"
+      - "packages/gateway/src/eaos/gateway/api/routes/invoke.py"
+      - "packages/gateway/src/eaos/gateway/api/routes/admin.py"
+    reproducible_entries:
+      - name: "Safety-60"
+        command_template: "uv run python benchmarks/competition/runners/run_eval.py --suite safety --run-id <run_id>"
+        dataset: "benchmarks/competition/datasets/safety_attacks_v1.yaml"
+      - name: "Order Core-27"
+        command_template: "uv run python benchmarks/competition/runners/run_eval.py --suite order --order-profile core-v1 --run-id <run_id>"
+        dataset: "benchmarks/competition/datasets/order_tasks_core_v1.yaml"
+    run_ids:
+      - "safety-rc-20260718-03"
+      - "order-core-v1-rc-20260718-03"
+      - "demos-rc03-repeat-01"
+      - "demos-rc03-repeat-02"
+      - "demos-rc03-repeat-03"
+    result_artifacts:
+      - "benchmarks/competition/results/safety-rc-20260718-03/safety_metrics.json"
+      - "benchmarks/competition/results/safety-rc-20260718-03/safety_results.jsonl"
+      - "benchmarks/competition/results/order-core-v1-rc-20260718-03/order_metrics.json"
+    evidence_artifacts:
+      - "artifacts/competition-evidence/safety-rc-20260718-03/manifest.json"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/manifest.json"
+      - "artifacts/competition-evidence/demos-rc03-repeat-01/approvals.jsonl"
+      - "artifacts/competition-evidence/demos-rc03-repeat-02/approvals.jsonl"
+      - "artifacts/competition-evidence/demos-rc03-repeat-03/approvals.jsonl"
     metrics:
-      - name: "审批伪造/重放/跨会话绕过"
-        threshold: "0"
-        result: pending
-      - name: "高风险审批触发率"
-        threshold: "100%"
-        result: pending
-      - name: "拒绝/过期审批执行次数"
-        threshold: "0"
-        result: pending
+      - name: "Safety-60 阻断率"
+        sample_size: 60
+        result: 1.0
+        display: "60/60（100%）"
+        status: "pass"
+      - name: "泄漏案例数"
+        sample_size: 60
+        result: 0
+        status: "pass"
+      - name: "跨租户泄漏数"
+        sample_size: 10
+        result: 0
+        status: "pass"
+      - name: "安全案例业务副作用违规数"
+        sample_size: 60
+        result: 0
+        status: "pass"
+      - name: "订单审批中断验证率"
+        result: 1.0
+        status: "pass"
+      - name: "选择性审批策略准确率"
+        result: 0.555556
+        status: "diagnostic_known_boundary"
+      - name: "主演示职责分离通过率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+    category_results:
+      approval_forgery: "15/15"
+      approval_replay: "15/15"
+      cross_session_resume: "10/10"
+      cross_tenant_access: "10/10"
+      privilege_escalation: "10/10"
     g0_safety:
-      - "客户端decision字段无效"
-      - "服务端查询真实审批记录"
-      - "pending/rejected/expired/他租户/他会话均不可恢复"
-      - "approved只执行一次（一次性消费）"
-    owner: pending
-    reviewer: pending
-    result: pending
+      - "客户端不提供可被信任的 approved decision；服务端查询真实审批记录。"
+      - "pending、rejected、expired、已消费、他租户或他会话审批均不可恢复。"
+      - "审批在受控写入完成并记录审计后才被消费。"
     limitations:
-      - "当前ResumeRequest信任客户端decision"
-      - "WritePipeline只看approval_id非空"
-      - "approve/reject SQL缺tenant/status条件"
+      - "销售订单工具统一为 high-risk，尚未实现按金额、字段和业务语境细分的风险分级。"
+      - "selective approval policy accuracy=0.555556 是诊断项，不包装为智能风险分类能力。"
 
-  - claim_id: C-TRUST-02
-    statement: "写入产生before/after审计，幂等执行，故障注入下补偿回滚经数据库终态验证"
-    level: 核心
-    current_maturity: L1-L2
-    target_maturity: L4
-    boundary: "模拟ERP上的补偿恢复，非跨系统强一致分布式事务"
+  - claim_id: "C-TRUST-02"
+    statement: "受控写入保存审批、Trace、会话、幂等键和 before/after 审计关联；重复请求复用既有结果，补偿回滚以后端数据库终态验证成功。"
+    category: "核心"
+    current_maturity: "L4"
+    target_maturity: "L4"
+    status: "verified_with_sample_size_boundary"
+    owner: "逐风破浪"
+    reviewer: "frozen evaluator + evidence verifier"
     source_anchors:
-      - packages/harness/src/eaos/harness/write_pipeline.py
-      - packages/observability/src/eaos/observability/audit.py
-      - packages/data/src/eaos/data/erp_connector.py
-    dataset_version: "pending"
-    case_ids: []
-    run_ids: []
+      - "packages/harness/src/eaos/harness/write_pipeline.py"
+      - "packages/data/src/eaos/data/erp_connector.py"
+      - "packages/observability/src/eaos/observability/audit.py"
+      - "packages/infra/src/eaos/infra/db/migrations/versions/0017_write_audit_execution_context.py"
+    reproducible_entries:
+      - name: "Order Core-27"
+        command_template: "uv run python benchmarks/competition/runners/run_eval.py --suite order --order-profile core-v1 --run-id <run_id>"
+      - name: "Demo B"
+        command_template: "uv run python benchmarks/competition/runners/run_e2e.py --demo B --run-id <run_id>"
+    run_ids:
+      - "order-core-v1-rc-20260718-03"
+      - "demos-rc03-repeat-01"
+      - "demos-rc03-repeat-02"
+      - "demos-rc03-repeat-03"
+    result_artifacts:
+      - "benchmarks/competition/results/order-core-v1-rc-20260718-03/order_metrics.json"
+      - "benchmarks/competition/results/demos-rc03-repeat-01/e2e_results.json"
+      - "benchmarks/competition/results/demos-rc03-repeat-02/e2e_results.json"
+      - "benchmarks/competition/results/demos-rc03-repeat-03/e2e_results.json"
+    evidence_artifacts:
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/write_audit.jsonl"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/traces.jsonl"
+      - "artifacts/competition-evidence/order-core-v1-rc-20260718-03/approvals.jsonl"
+      - "artifacts/competition-evidence/demos-rc03-repeat-01/write_audit.jsonl"
+      - "artifacts/competition-evidence/demos-rc03-repeat-02/write_audit.jsonl"
+      - "artifacts/competition-evidence/demos-rc03-repeat-03/write_audit.jsonl"
     metrics:
-      - name: "回滚成功率"
-        threshold: "100%（>=60样本，>=6故障点）"
-        result: pending
-      - name: "重试重复订单数"
-        threshold: "0（>=50重试）"
-        result: pending
-      - name: "审计关键字段完整率"
-        threshold: "100%"
-        result: pending
-      - name: "Trace-审批-审计-业务记录关联率"
-        threshold: "100%"
-        result: pending
+      - name: "Order Core 幂等成功率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "Order Core 回滚成功率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "Order Core 审计关联率"
+        result: 1.0
+        status: "pass"
+      - name: "Demo B 幂等复用通过率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "Demo B 补偿回滚通过率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
+      - name: "主演示 Trace-审批-审计-订单关联通过率"
+        sample_size: 3
+        result: 1.0
+        display: "3/3（100%）"
+        status: "pass"
     g0_safety:
-      - "回滚异常不被吞后报成功"
-      - "数据库终态等于before snapshot才设rolled_back=True"
-      - "回滚失败时设rollback_error/compensation_failed"
-    owner: pending
-    reviewer: pending
-    result: pending
+      - "数据库终态等于预期补偿状态后才标记 rolled_back=true。"
+      - "相同规范化意图和 session 的重复请求返回同一 audit，不创建重复订单。"
+      - "审计记录绑定 approval_id、trace_id、session_id 和 idempotency_key。"
     limitations:
-      - "当前回滚异常被pass吞掉"
-      - "无幂等键实现"
-      - "create未稳定返回after snapshot"
+      - "冻结集中的幂等和回滚案例各为 3 例，另有 3 轮主演示交叉验证，未达到早期 50/60 大样本愿景。"
+      - "回滚是模拟 ERP 上的补偿操作，不声明跨外部系统强一致分布式事务。"
+      - "冻结 evaluator 验证公开补偿事务，没有逐一注入所有内部故障点。"
 
-  - claim_id: C-HISTORY-01
-    statement: "历史会话被模型真实使用，LangGraph checkpoint持久化到PostgreSQL，重启后可恢复"
-    level: 必须支撑
-    current_maturity: L1
-    target_maturity: L3/L4
-    boundary: "真实PostgreSQL checkpointer；非MemorySaver"
+  - claim_id: "C-HISTORY-01"
+    statement: "生产 API 将历史消息加入模型上下文，并使用 PostgreSQL Checkpointer 保持租户、Agent、会话隔离；源码和回归已闭合。"
+    category: "支撑"
+    current_maturity: "L3"
+    target_maturity: "L4"
+    status: "implemented_and_regression_tested_without_dedicated_frozen_benchmark"
+    owner: "逐风破浪"
+    reviewer: "source review + regression suite"
     source_anchors:
-      - packages/agent/src/eaos/agent/runner.py
-      - packages/gateway/src/eaos/gateway/api/routes/sessions.py
-      - packages/infra/src/eaos/infra/db/migrations/versions/0010_agent_messages.py
-    dataset_version: "pending"
-    case_ids: []
+      - "packages/agent/src/eaos/agent/runner.py"
+      - "apps/eaos_api/src/eaos_api/wiring.py"
+      - "packages/gateway/src/eaos/gateway/api/routes/sessions.py"
+      - "packages/infra/src/eaos/infra/db/migrations/versions/0010_agent_messages.py"
+    regression_anchors:
+      - "packages/agent/tests/test_runner.py"
+      - "packages/gateway/tests/test_routes_sessions.py"
+      - "apps/eaos_api/tests/test_m6_integration.py"
     run_ids: []
     metrics:
-      - name: "第二轮代词/省略依赖第一轮信息"
-        threshold: "正确率>=90%"
-        result: pending
-      - name: "API重启后历史仍被使用"
-        threshold: "pass"
-        result: pending
-      - name: "多租户/多会话不串线"
-        threshold: "pass"
-        result: pending
-    owner: pending
-    reviewer: pending
-    result: pending
+      - name: "独立冻结 History benchmark"
+        result: null
+        status: "not_run"
+    implemented_contracts:
+      - "生产 wiring 注入 AsyncPostgresSaver；Runner 无显式注入时的 MemorySaver 仅为组件默认值。"
+      - "最近历史消息在调用模型前按租户、用户和 session 范围加载。"
+      - "thread_id 按租户、Agent 和 session 解析，checkpoint 表持久化于 PostgreSQL。"
     limitations:
-      - "默认MemorySaver，重启后丢失"
-      - "Runner初始state只放当前消息，不加载历史"
+      - "尚无冻结的多轮省略指代准确率、进程重启后恢复成功率和跨会话隔离专项结果。"
+      - "因此不在竞赛正文中把 History 写成已完成 L4 量化主张。"
 
-  - claim_id: C-SKILL-01
-    statement: "至少一个真实Skill从聊天入口端到端执行，非法Skill fail closed"
-    level: 必须支撑
-    current_maturity: L1-L2
-    target_maturity: L3/L4
-    boundary: "从seed Skill中选择或新增一个最小Skill"
+  - claim_id: "C-SKILL-01"
+    statement: "用户可见 Skill 已接入 Agent 的自动选择与 @mention 路径，按精确名称解析并由 Guardrail 执行器 fail closed；源码和回归已闭合。"
+    category: "支撑"
+    current_maturity: "L3"
+    target_maturity: "L4"
+    status: "implemented_and_regression_tested_without_dedicated_frozen_benchmark"
+    owner: "逐风破浪"
+    reviewer: "source review + regression suite"
     source_anchors:
-      - packages/skills/src/eaos/skills/resolver.py
-      - packages/skills/src/eaos/skills/executor.py
-      - packages/agent/src/eaos/agent/runner.py
-    dataset_version: "pending"
-    case_ids: []
+      - "packages/skills/src/eaos/skills/resolver.py"
+      - "packages/skills/src/eaos/skills/executor.py"
+      - "packages/agent/src/eaos/agent/runner.py"
+      - "apps/eaos_api/src/eaos_api/wiring.py"
+    regression_anchors:
+      - "packages/skills/tests/test_resolver.py"
+      - "packages/skills/tests/test_executor.py"
+      - "packages/agent/tests/test_runner.py"
     run_ids: []
     metrics:
-      - name: "不存在/越权Skill不误执行"
-        threshold: "100%"
-        result: pending
-      - name: "自动选择和@mention两种方式"
-        threshold: "pass"
-        result: pending
-    owner: pending
-    reviewer: pending
-    result: pending
+      - name: "独立冻结 Skill benchmark"
+        result: null
+        status: "not_run"
+    implemented_contracts:
+      - "个人、部门和公司级 published Skill 按用户可见范围解析。"
+      - "@mention 强制选择与 LLM 自动选择都进入同一 Skill 节点。"
+      - "不存在、歧义、缺失 Guardrail、未接治理恢复的高风险 Skill 均 fail closed。"
+      - "工具绑定在执行前校验，写绑定不绕过 WritePipeline。"
     limitations:
-      - "Resolver查询未返回完整instructions/tools/tool_bindings"
-      - "不存在Skill可能回退第一个"
+      - "尚无冻结的 Skill 自动选择准确率、@mention 成功率和端到端任务完成率专项结果。"
+      - "高风险 Skill 的通用 HITL 恢复契约仍采用 fail closed，不能等同于订单专用写入闭环。"
+
+document_usage:
+  primary_story_claims:
+    - "C-KNOW-01"
+    - "C-WORK-01"
+    - "C-TRUST-01"
+    - "C-TRUST-02"
+  supporting_technical_claims:
+    - "C-RAG-01"
+    - "C-HISTORY-01"
+    - "C-SKILL-01"
+  recommended_demo_order:
+    - "先展示 C-KNOW-01：个人经验如何经治理沉淀为可引用的组织能力。"
+    - "再展示 C-WORK-01 + C-TRUST-01 + C-TRUST-02：自然语言意图如何安全转化为可审计、可回滚的业务行动。"
+  writing_constraints:
+    - "RAG 指标必须分 Retrieval Core-48 与 Answer Core-16 两层呈现，不混合口径。"
+    - "selective approval 55.6%、RAG Recall/nDCG、端到端延迟和小样本边界必须主动披露。"
+    - "History 与 Skill 可写为平台支撑能力，不能写成已完成独立 L4 竞赛实证。"

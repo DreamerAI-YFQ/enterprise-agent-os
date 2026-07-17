@@ -23,16 +23,24 @@ before accepting traffic.
 
 ```bash
 # 1. Preflight — verify environment is ready
-python benchmarks/competition/preflight.py
+uv run python benchmarks/competition/preflight.py
 
-# 2. (Future) Reset demo data
-python scripts/competition/reset_demo_data.py
+# 2. Reset deterministic demo data when a clean baseline is required
+uv run python scripts/competition/reset_demo_data.py
 
-# 3. (Future) Run evaluation
-python benchmarks/competition/runners/run_eval.py --variant B4_full
+# 3. Run one frozen evaluation profile with a unique run ID
+uv run python benchmarks/competition/runners/run_eval.py \
+  --suite order \
+  --order-profile core-v1 \
+  --run-id order-core-v1-YYYYMMDD
 
-# 4. (Future) Verify evidence
-python benchmarks/competition/runners/verify_evidence.py --run-id <run_id>
+# 4. Verify the exported evidence package
+uv run python scripts/competition/verify_evidence.py \
+  --run-id <run_id> \
+  --require-source-clean \
+  --require-results \
+  --require-traces \
+  --require-usage
 ```
 
 ## Directory Structure
@@ -67,15 +75,20 @@ Claim → Source Anchor → Reproducible Entry → Raw Artifacts → Metrics →
 
 ### Current Claims
 
-| ID | Statement | Current | Target |
-|----|-----------|---------|--------|
-| C-KNOW-01 | Knowledge contribution→review→ingest→reuse | L2 | L4 |
-| C-RAG-01 | RAG with real scores, permission-first, citations | L1-L2 | L4 |
-| C-WORK-01 | NL order→approval→write→audit | L1 | L4 |
-| C-TRUST-01 | Unforgeable approval, server-verified resume | L1-L2 | L4 |
-| C-TRUST-02 | Idempotent write, verified compensating rollback | L1-L2 | L4 |
-| C-HISTORY-01 | History used by model, PG checkpoint persistence | L1 | L3/L4 |
-| C-SKILL-01 | Real Skill E2E from chat, fail-closed on invalid | L1-L2 | L3/L4 |
+| ID | Statement | Current | Evidence status |
+|----|-----------|---------|-----------------|
+| C-KNOW-01 | Knowledge contribution→review→ingest→reuse | L4 | 3/3 frozen E2E demo runs passed |
+| C-RAG-01 | Permission-first retrieval, grounded answers, citations | L4 | Core-48 retrieval + Core-16 answer evidence frozen |
+| C-WORK-01 | NL order→approval→write→audit | L4 | 27/27 frozen core cases passed |
+| C-TRUST-01 | Unforgeable approval, server-verified resume | L4 | 60/60 safety cases passed; risk grading remains coarse |
+| C-TRUST-02 | Idempotent write, verified compensating rollback | L4 | Core cases and 3/3 demo repeats passed |
+| C-HISTORY-01 | History used by model, PG checkpoint persistence | L3 | Implemented and regression-tested; no dedicated frozen benchmark |
+| C-SKILL-01 | Skill selection/execution with fail-closed guardrails | L3 | Implemented and regression-tested; no dedicated frozen benchmark |
+
+L4 denotes a closed evidence chain within the boundary stated in
+`claim_matrix.yaml`; it is not a claim of unlimited scope or production-scale
+validation. Diagnostic shortfalls and sample-size limits remain part of the
+claim rather than being hidden from the competition narrative.
 
 ## Evidence Rules
 
