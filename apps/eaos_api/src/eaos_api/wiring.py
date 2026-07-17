@@ -513,8 +513,8 @@ async def build_deps(config: AppConfig) -> AppDeps:
         risk_level="high",
         description=(
             "Create a sales order in the ERP system. "
-            "Arguments: customer_code, product_sku, quantity. "
-            "Unit price is resolved from authoritative ERP product master data."
+            "Arguments: customer_code, product_sku, quantity, and optional positive "
+            "unit_price. Omit unit_price to use authoritative ERP product master data."
         ),
         input_schema={
             "type": "object",
@@ -528,6 +528,11 @@ async def build_deps(config: AppConfig) -> AppDeps:
                     "description": "Product SKU (e.g. PRD-ELEC-001)",
                 },
                 "quantity": {"type": "integer", "description": "Order quantity"},
+                "unit_price": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Optional positive negotiated price; omit for master price",
+                },
             },
             "required": ["customer_code", "product_sku", "quantity"],
         },

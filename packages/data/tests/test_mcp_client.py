@@ -511,6 +511,20 @@ class TestToolRegistryWriteNormalization:
         assert second_intent.data == first_intent.data
         assert second_intent.idempotency_key == first_intent.idempotency_key
 
+        await registry.call_write_tool(
+            "erp_create_sales_order",
+            {
+                "customer_code": "CUS-TECH-0001",
+                "product_sku": "PRD-ELEC-001",
+                "quantity": 3,
+                "unit_price": 4500,
+            },
+            ctx,
+        )
+        negotiated_intent = pipeline.execute.await_args_list[2].args[0]
+        assert negotiated_intent.data["unit_price"] == 4500.0
+        assert negotiated_intent.idempotency_key != first_intent.idempotency_key
+
 
 class TestToolRegistryResumeWrite:
     async def test_resume_uses_current_execution_trace(self) -> None:

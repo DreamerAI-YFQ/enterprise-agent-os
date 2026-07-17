@@ -177,8 +177,9 @@ class ToolRegistry:
 
         The actual DB column resolution (customer_code→customer_id UUID lookup)
         happens in the ErpConnector._resolve_write_args() method, which has DB
-        access. Sales-order prices are server-owned product-master data: an
-        LLM-proposed ``unit_price`` must not change the intent or idempotency key.
+        access. A missing or zero sales-order price means "use product master"
+        and is omitted from the canonical intent; a positive negotiated price
+        remains part of both the business intent and its idempotency key.
         """
         if tool_name == "erp_create_sales_order":
             customer_code = arguments.get("customer_code", arguments.get("customer_id"))
@@ -188,6 +189,12 @@ class ToolRegistry:
                 "product_sku": product_sku,
                 "quantity": arguments.get("quantity"),
             }
+            try:
+                unit_price = float(arguments.get("unit_price", 0))
+            except (TypeError, ValueError):
+                unit_price = 0.0
+            if unit_price > 0:
+                canonical["unit_price"] = unit_price
             return {key: value for key, value in canonical.items() if value is not None}
         return dict(arguments)  # shallow copy to avoid mutating caller's dict
 
