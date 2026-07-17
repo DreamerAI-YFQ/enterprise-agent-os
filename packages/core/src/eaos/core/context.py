@@ -29,6 +29,7 @@ class TenantContext:
     agent_scope: str  # personal/department/company
     session_id: UUID | None = None
     department_ids: list[UUID] = field(default_factory=list)
+    mode: str | None = None  # eval hint: "rag" forces knowledge-base retrieval
 
     def for_agent(
         self,
@@ -45,6 +46,7 @@ class TenantContext:
             agent_scope=scope or self.agent_scope,
             session_id=session_id or self.session_id,
             department_ids=list(self.department_ids),
+            mode=self.mode,
         )
 
     @property

@@ -63,6 +63,7 @@ class InvokeRequest(BaseModel):
     message: str
     session_id: UUID | None = None
     attachments: list[AttachmentRef] = []
+    mode: str | None = None  # eval hint: "rag" forces knowledge-base retrieval
 
 
 class ResumeRequest(BaseModel):
@@ -240,6 +241,7 @@ async def invoke(
         agent_scope="personal",
         session_id=session_id,
         department_ids=department_ids,
+        mode=body.mode,
     )
 
     # Load attachments (image -> data URL; file -> extracted text).

@@ -224,7 +224,7 @@ async def eval_rag_case(
         "user_role": role,
     }
 
-    sse = await invoke_agent_sse(client, token, query)
+    sse = await invoke_agent_sse(client, token, query, extra_payload={"mode": "rag"})
 
     output = sse["final_content"] or ""
     result["agent_response"] = output
