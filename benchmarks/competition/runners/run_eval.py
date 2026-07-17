@@ -314,9 +314,11 @@ async def _build_doc_id_map(admin_token: str) -> dict[str, str]:
     return mapping
 
 
-async def run_rag_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, Any]]:
+async def run_rag_suite(tokens: dict[str, str], run_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
     """Run all RAG evaluation cases."""
     cases = load_dataset("rag_queries_v1.yaml")
+    if limit is not None and limit > 0:
+        cases = cases[:limit]
     print(f"  RAG suite: {len(cases)} cases")
 
     # Fix-A: Pre-fetch all knowledge documents and build a UUID -> KB-label
@@ -494,9 +496,13 @@ async def eval_order_case(
     return result
 
 
-async def run_order_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, Any]]:
+async def run_order_suite(
+    tokens: dict[str, str], run_id: str, *, limit: int | None = None
+) -> list[dict[str, Any]]:
     """Run all order evaluation cases."""
     cases = load_dataset("order_tasks_v1.yaml")
+    if limit is not None and limit > 0:
+        cases = cases[:limit]
     print(f"  Order suite: {len(cases)} cases")
 
     results: list[dict[str, Any]] = []
@@ -667,9 +673,13 @@ async def eval_safety_case(
     return result
 
 
-async def run_safety_suite(tokens: dict[str, str], run_id: str) -> list[dict[str, Any]]:
+async def run_safety_suite(
+    tokens: dict[str, str], run_id: str, *, limit: int | None = None
+) -> list[dict[str, Any]]:
     """Run all safety attack cases."""
     cases = load_dataset("safety_attacks_v1.yaml")
+    if limit is not None and limit > 0:
+        cases = cases[:limit]
     print(f"  Safety suite: {len(cases)} cases")
 
     results: list[dict[str, Any]] = []
@@ -723,7 +733,7 @@ async def run_safety_suite(tokens: dict[str, str], run_id: str) -> list[dict[str
 # Main
 # ---------------------------------------------------------------------------
 
-async def main(suite: str, run_id: str | None = None) -> int:
+async def main(suite: str, run_id: str | None = None, limit: int | None = None) -> int:
     if run_id is None:
         run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}"
 
@@ -749,17 +759,17 @@ async def main(suite: str, run_id: str | None = None) -> int:
     # Run suites
     if suite in ("all", "rag"):
         print("Running RAG suite...")
-        await run_rag_suite(tokens, run_id)
+        await run_rag_suite(tokens, run_id, limit=limit)
         print()
 
     if suite in ("all", "order"):
         print("Running Order suite...")
-        await run_order_suite(tokens, run_id)
+        await run_order_suite(tokens, run_id, limit=limit)
         print()
 
     if suite in ("all", "safety"):
         print("Running Safety suite...")
-        await run_safety_suite(tokens, run_id)
+        await run_safety_suite(tokens, run_id, limit=limit)
         print()
 
     # Export evidence
@@ -784,5 +794,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run competition evaluation")
     parser.add_argument("--suite", choices=["all", "rag", "order", "safety"], default="all")
     parser.add_argument("--run-id", default=None, help="Run identifier")
+    parser.add_argument("--limit", type=int, default=None, help="Max cases per suite (e.g. 50)")
     args = parser.parse_args()
-    sys.exit(asyncio.run(main(args.suite, args.run_id)))
+    sys.exit(asyncio.run(main(args.suite, args.run_id, limit=args.limit)))
