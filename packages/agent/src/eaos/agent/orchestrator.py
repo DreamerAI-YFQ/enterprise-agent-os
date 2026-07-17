@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID, uuid4
 
-from eaos.agent.runner import AgentEvent
+from eaos.agent.runner import AgentEvent, _detect_write_intent, _infer_exact_erp_read
 from eaos.infra.llm.base import Message
 
 if TYPE_CHECKING:
@@ -213,6 +213,12 @@ class AgentOrchestratorImpl:
         message: str,
     ) -> CollaborationPlan:
         """Use LLM to determine collaboration mode and sub-task assignment."""
+        # Exact tenant-scoped reads and all governed mutations are inherently
+        # single-agent tasks. Bypass the collaboration LLM so security checks
+        # do not depend on an external planner being available.
+        if _infer_exact_erp_read(message) is not None or _detect_write_intent(message):
+            return CollaborationPlan(mode=CollaborationMode.SINGLE)
+
         system_prompt = _ANALYZE_SYSTEM_PROMPT
         try:
             agents = await self._dispatcher.list_available(ctx)

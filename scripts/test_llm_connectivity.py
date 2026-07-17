@@ -12,7 +12,6 @@ No database or Docker required — just API connectivity.
 
 import asyncio
 import os
-import sys
 
 # Load .env manually (avoid pulling full AppConfig which needs DB)
 from pathlib import Path
@@ -28,9 +27,9 @@ if env_path.exists():
 
 
 async def test_chat() -> None:
-    from eaos.infra.llm.openai_adapter import OpenAILLMClient
-    from eaos.infra.llm.base import Message
     from eaos.core.config import LLMConfig
+    from eaos.infra.llm.base import Message
+    from eaos.infra.llm.openai_adapter import OpenAILLMClient
 
     cfg = LLMConfig()
     base_url = cfg.openai_base_url
@@ -56,9 +55,9 @@ async def test_chat() -> None:
 
 
 async def test_stream() -> None:
-    from eaos.infra.llm.openai_adapter import OpenAILLMClient
-    from eaos.infra.llm.base import Message
     from eaos.core.config import LLMConfig
+    from eaos.infra.llm.base import Message
+    from eaos.infra.llm.openai_adapter import OpenAILLMClient
 
     cfg = LLMConfig()
     api_key = cfg.openai_api_key
@@ -83,8 +82,8 @@ async def test_stream() -> None:
 
 
 async def test_embedding() -> None:
-    from eaos.infra.vector.embedder import OpenAIEmbedder
     from eaos.core.config import EmbeddingConfig
+    from eaos.infra.vector.embedder import OpenAIEmbedder
 
     cfg = EmbeddingConfig()
     api_key = cfg.api_key

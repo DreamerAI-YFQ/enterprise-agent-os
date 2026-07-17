@@ -386,7 +386,10 @@ function AddMemberModal({
     queryFn: async () => {
       const { data, error } = await apiClient.GET("/admin/users", {});
       if (error || !data) return [] as User[];
-      return (data as unknown as { items?: User[] } | User[]).hasOwnProperty("items")
+      return Object.prototype.hasOwnProperty.call(
+        data as unknown as { items?: User[] } | User[],
+        "items",
+      )
         ? (data as unknown as { items: User[] }).items
         : (data as unknown as User[]);
     },

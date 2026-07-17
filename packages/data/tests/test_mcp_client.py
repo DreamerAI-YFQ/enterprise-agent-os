@@ -11,6 +11,7 @@ subprocess and exercise the full stdio JSON-RPC path.
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
@@ -23,6 +24,8 @@ from eaos.data.connector import (
 )
 from eaos.data.mcp.client import McpClient
 from eaos.data.mcp.registry import ToolRegistry
+from eaos.harness.write_pipeline import WriteOutcome
+from eaos.observability._global import set_global_tracer
 
 TID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -105,13 +108,9 @@ class _MockSession:
         self._resources = resources or []
         self.call_tool = AsyncMock()
         self.list_tools = AsyncMock(return_value=_MockSdkListToolsResult(self._tools))
-        self.list_resources = AsyncMock(
-            return_value=_MockSdkListResourcesResult(self._resources)
-        )
+        self.list_resources = AsyncMock(return_value=_MockSdkListResourcesResult(self._resources))
         self.read_resource = AsyncMock(
-            return_value=_MockSdkReadResourceResult(
-                [_MockSdkContent("resource content")]
-            )
+            return_value=_MockSdkReadResourceResult([_MockSdkContent("resource content")])
         )
         self.initialize = AsyncMock()
 
@@ -152,9 +151,7 @@ def _make_internal_connector(
             total=len(rows) if rows is not None else 1,
         )
     )
-    connector.describe_schema = AsyncMock(
-        return_value=schema if schema is not None else _schema()
-    )
+    connector.describe_schema = AsyncMock(return_value=schema if schema is not None else _schema())
     return connector
 
 
@@ -223,9 +220,7 @@ class TestMcpClientListTools:
 class TestMcpClientCallTool:
     async def test_success(self) -> None:
         client, session, _ = _make_client()
-        session.call_tool.return_value = _MockSdkCallResult(
-            [_MockSdkContent('{"id": "ord_001"}')]
-        )
+        session.call_tool.return_value = _MockSdkCallResult([_MockSdkContent('{"id": "ord_001"}')])
 
         result = await client.call_tool(
             "mock-saas.erp_create_order",
@@ -242,15 +237,11 @@ class TestMcpClientCallTool:
 
     async def test_bare_name_without_prefix(self) -> None:
         client, session, _ = _make_client()
-        session.call_tool.return_value = _MockSdkCallResult(
-            [_MockSdkContent("ok")]
-        )
+        session.call_tool.return_value = _MockSdkCallResult([_MockSdkContent("ok")])
 
         await client.call_tool("erp_get_order", {"order_id": "ord_001"}, TID)
 
-        session.call_tool.assert_called_once_with(
-            "erp_get_order", {"order_id": "ord_001"}
-        )
+        session.call_tool.assert_called_once_with("erp_get_order", {"order_id": "ord_001"})
 
     async def test_error_result(self) -> None:
         client, session, _ = _make_client()
@@ -266,9 +257,7 @@ class TestMcpClientCallTool:
     async def test_tenant_id_not_sent_to_session(self) -> None:
         """MCP protocol is tenant-agnostic; tenant_id is EAOS-side only."""
         client, session, _ = _make_client()
-        session.call_tool.return_value = _MockSdkCallResult(
-            [_MockSdkContent("ok")]
-        )
+        session.call_tool.return_value = _MockSdkCallResult([_MockSdkContent("ok")])
 
         await client.call_tool("test_tool", {}, TID)
 
@@ -386,13 +375,9 @@ class TestToolRegistryCallToolMcp:
             server_name="erp",
         )
         registry.register_mcp("erp", mcp_client)
-        session.call_tool.return_value = _MockSdkCallResult(
-            [_MockSdkContent('{"id": "ord_001"}')]
-        )
+        session.call_tool.return_value = _MockSdkCallResult([_MockSdkContent('{"id": "ord_001"}')])
 
-        result = await registry.call_tool(
-            "erp.create_order", {"amount": 100}, TID
-        )
+        result = await registry.call_tool("erp.create_order", {"amount": 100}, TID)
 
         assert result.is_error is False
         assert "ord_001" in result.content[0]["text"]
@@ -415,14 +400,10 @@ class TestToolRegistryCallToolInternal:
 
     async def test_routes_read(self) -> None:
         registry = ToolRegistry()
-        connector = _make_internal_connector(
-            rows=[{"id": "1", "name": "Alice"}]
-        )
+        connector = _make_internal_connector(rows=[{"id": "1", "name": "Alice"}])
         registry.register_internal("erp", connector)
 
-        result = await registry.call_tool(
-            "erp_read", {"resource": "customers", "limit": 10}, TID
-        )
+        result = await registry.call_tool("erp_read", {"resource": "customers", "limit": 10}, TID)
 
         assert result.is_error is False
         payload = json.loads(result.content[0]["text"])
@@ -442,9 +423,7 @@ class TestToolRegistryCallToolInternal:
         connector = _make_internal_connector()
         registry.register_internal("erp", connector)
 
-        result = await registry.call_tool(
-            "erp_describe_schema", {"resource": "products"}, TID
-        )
+        result = await registry.call_tool("erp_describe_schema", {"resource": "products"}, TID)
 
         assert result.is_error is False
         payload = json.loads(result.content[0]["text"])
@@ -474,12 +453,52 @@ class TestToolRegistryCallToolErrors:
         connector.read.side_effect = RuntimeError("DB connection lost")
         registry.register_internal("erp", connector)
 
-        result = await registry.call_tool(
-            "erp_read", {"resource": "customers"}, TID
-        )
+        result = await registry.call_tool("erp_read", {"resource": "customers"}, TID)
 
         assert result.is_error is True
         assert "DB connection lost" in (result.error_message or "")
+
+
+class TestToolRegistryResumeWrite:
+    async def test_resume_uses_current_execution_trace(self) -> None:
+        registry = ToolRegistry()
+        pipeline = AsyncMock()
+        pipeline.execute.return_value = WriteOutcome(success=True)
+        registry.set_write_pipeline(pipeline)
+        registry.register_write_tool(
+            "erp_create_sales_order",
+            resource="orders",
+            operation="create",
+            risk_level="high",
+        )
+        execution_trace_id = UUID("00000000-0000-0000-0000-000000000901")
+        tracer = AsyncMock()
+        tracer.current_trace_id.return_value = execution_trace_id
+        set_global_tracer(tracer)
+        approval = {
+            "id": "00000000-0000-0000-0000-000000000701",
+            "tenant_id": str(TID),
+            "agent_id": "00000000-0000-0000-0000-000000000301",
+            "session_id": "00000000-0000-0000-0000-000000000401",
+            "requested_by": "00000000-0000-0000-0000-000000000201",
+            "tool_name": "erp_create_sales_order",
+            "resource": "orders",
+            "operation": "create",
+            "risk_level": "high",
+            "intent_data": {
+                "data": {"quantity": 1},
+                "trace_id": "00000000-0000-0000-0000-000000000801",
+                "idempotency_key": "idem-1",
+            },
+        }
+        try:
+            result = await registry.resume_write_tool(approval)
+        finally:
+            set_global_tracer(None)
+
+        assert result.is_error is False
+        intent = pipeline.execute.call_args.args[0]
+        assert intent.trace_id == execution_trace_id
 
 
 # ============================================================
@@ -491,9 +510,7 @@ class TestToolRegistryHealthCheck:
     async def test_checks_all_mcp_clients(self) -> None:
         registry = ToolRegistry()
 
-        healthy_client, _, _ = _make_client(
-            tools=[_MockSdkTool("t1")], server_name="healthy"
-        )
+        healthy_client, _, _ = _make_client(tools=[_MockSdkTool("t1")], server_name="healthy")
         unhealthy_client, session, _ = _make_client(server_name="unhealthy")
         session.list_tools.side_effect = RuntimeError("down")
 
@@ -519,7 +536,7 @@ class TestMcpClientIntegration:
         from eaos.data.mcp.client import StdioTransport
 
         transport = StdioTransport(
-            command="python",
+            command=sys.executable,
             args=["-m", "mock_saas.mcp_server"],
         )
         client = McpClient(transport, "mock-saas")
@@ -537,7 +554,7 @@ class TestMcpClientIntegration:
         from eaos.data.mcp.client import StdioTransport
 
         transport = StdioTransport(
-            command="python",
+            command=sys.executable,
             args=["-m", "mock_saas.mcp_server"],
         )
         client = McpClient(transport, "mock-saas")

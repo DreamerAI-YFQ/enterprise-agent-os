@@ -79,7 +79,12 @@ mypy_path = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-testpaths = ["packages/*/tests", "apps/*/tests"]
+testpaths = [
+    "packages/*/tests",
+    "apps/*/tests",
+    "tests",
+    "benchmarks/competition/tests",
+]
 addopts = "--import-mode=importlib"
 markers = [
     "integration: requires live PG/Redis/LLM services (skip unless EAOS_RUN_INTEGRATION=1)",

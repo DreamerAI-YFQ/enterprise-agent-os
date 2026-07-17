@@ -14,8 +14,8 @@ from __future__ import annotations
 import csv
 import io
 import json
-from typing import Any
 from datetime import datetime
+from typing import Any
 
 from eaos.core.auth import Principal  # noqa: TC002
 from eaos.gateway.api.deps import get_db
@@ -41,8 +41,13 @@ def _columns(resource: str) -> tuple[str, str, list[str]]:
             "iam.users",
             "created_at",
             [
-                "id", "email", "name", "role", "status",
-                "preferences", "created_at",
+                "id",
+                "email",
+                "name",
+                "role",
+                "status",
+                "preferences",
+                "created_at",
             ],
         )
     if resource == "memory":
@@ -50,8 +55,14 @@ def _columns(resource: str) -> tuple[str, str, list[str]]:
             "knowledge.org_memories",
             "created_at",
             [
-                "id", "scope", "owner_id", "memory_type", "content",
-                "confidence", "source", "created_at",
+                "id",
+                "scope",
+                "owner_id",
+                "memory_type",
+                "content",
+                "confidence",
+                "source",
+                "created_at",
             ],
         )
     if resource == "knowledge":
@@ -61,8 +72,13 @@ def _columns(resource: str) -> tuple[str, str, list[str]]:
             "knowledge.documents",
             "created_at",
             [
-                "id", "title", "source_type", "source_uri",
-                "status", "metadata", "created_at",
+                "id",
+                "title",
+                "source_type",
+                "source_uri",
+                "status",
+                "metadata",
+                "created_at",
             ],
         )
     # sessions
@@ -70,8 +86,13 @@ def _columns(resource: str) -> tuple[str, str, list[str]]:
         "agent.sessions",
         "created_at",
         [
-            "id", "agent_id", "user_id", "title", "status",
-            "created_at", "last_active_at",
+            "id",
+            "agent_id",
+            "user_id",
+            "title",
+            "status",
+            "created_at",
+            "last_active_at",
         ],
     )
 
@@ -143,11 +164,14 @@ async def export_resource(
         writer = csv.writer(output)
         writer.writerow(csv_cols)
         for item in items:
-            writer.writerow([
-                json.dumps(item[col], ensure_ascii=False)
-                if isinstance(item.get(col), (dict, list)) else item.get(col, "")
-                for col in csv_cols
-            ])
+            writer.writerow(
+                [
+                    json.dumps(item[col], ensure_ascii=False)
+                    if isinstance(item.get(col), (dict, list))
+                    else item.get(col, "")
+                    for col in csv_cols
+                ]
+            )
         output.seek(0)
         return StreamingResponse(
             iter([output.getvalue()]),
@@ -232,7 +256,8 @@ async def _import_user(
         raise ValueError("email is required")
     existing = await db.fetch_one(
         "SELECT id FROM iam.users WHERE tenant_id = :p0 AND email = :p1",
-        tenant_id, email,
+        tenant_id,
+        email,
     )
     if existing:
         if mode == "upsert":
@@ -250,8 +275,11 @@ async def _import_user(
     await db.execute(
         "INSERT INTO iam.users (tenant_id, email, name, role, status) "
         "VALUES (:p0, :p1, :p2, :p3, :p4)",
-        tenant_id, email, item.get("name", email),
-        item.get("role", "employee"), item.get("status", "active"),
+        tenant_id,
+        email,
+        item.get("name", email),
+        item.get("role", "employee"),
+        item.get("status", "active"),
     )
     return 1, 0, 0
 
@@ -268,7 +296,9 @@ async def _import_memory(
     if owner_email:
         row = await db.fetch_one(
             "SELECT id FROM iam.users WHERE tenant_id = :p0 AND (email = :p1 OR id::text = :p2)",
-            tenant_id, str(owner_email), str(owner_email),
+            tenant_id,
+            str(owner_email),
+            str(owner_email),
         )
         owner_id = row["id"] if row else None
     if scope == "personal" and owner_id is None:
@@ -277,7 +307,9 @@ async def _import_memory(
     existing = await db.fetch_one(
         "SELECT id FROM knowledge.org_memories "
         "WHERE tenant_id = :p0 AND content = :p1 AND scope = :p2",
-        tenant_id, content, scope,
+        tenant_id,
+        content,
+        scope,
     )
     if existing:
         if mode == "upsert":
@@ -294,9 +326,13 @@ async def _import_memory(
         "INSERT INTO knowledge.org_memories "
         "(tenant_id, scope, owner_id, memory_type, content, confidence, source) "
         "VALUES (:p0, :p1, :p2, :p3, :p4, :p5, :p6)",
-        tenant_id, scope, owner_id,
-        item.get("memory_type", "fact"), content,
-        float(item.get("confidence", 0.9)), item.get("source", "import"),
+        tenant_id,
+        scope,
+        owner_id,
+        item.get("memory_type", "fact"),
+        content,
+        float(item.get("confidence", 0.9)),
+        item.get("source", "import"),
     )
     return 1, 0, 0
 
@@ -309,18 +345,21 @@ async def _import_knowledge(
     if not title or not content:
         raise ValueError("title and content are required")
     import hashlib
+
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     existing = await db.fetch_one(
         "SELECT id FROM knowledge.documents "
         "WHERE tenant_id = :p0 AND title = :p1 AND content_hash = :p2",
-        tenant_id, title, content_hash,
+        tenant_id,
+        title,
+        content_hash,
     )
     if existing:
         if mode == "upsert":
             await db.execute(
-                "UPDATE knowledge.documents SET source_type = :p0, status = :p1 "
-                "WHERE id = :p2",
-                item.get("source_type", "manual"), item.get("status", "approved"),
+                "UPDATE knowledge.documents SET source_type = :p0, status = :p1 WHERE id = :p2",
+                item.get("source_type", "manual"),
+                item.get("status", "approved"),
                 existing["id"],
             )
             return 0, 1, 0
@@ -331,9 +370,12 @@ async def _import_knowledge(
         "(tenant_id, title, source_type, source_uri, content_hash, status, metadata) "
         "VALUES (:p0, :p1, :p2, :p3, :p4, :p5, CAST(:p6 AS jsonb)) "
         "RETURNING id",
-        tenant_id, title,
-        item.get("source_type", "manual"), item.get("source_uri", ""),
-        content_hash, item.get("status", "approved"),
+        tenant_id,
+        title,
+        item.get("source_type", "manual"),
+        item.get("source_uri", ""),
+        content_hash,
+        item.get("status", "approved"),
         json.dumps(item.get("metadata", {}), ensure_ascii=False),
     )
     if doc_row:
@@ -343,6 +385,9 @@ async def _import_knowledge(
             "INSERT INTO knowledge.chunks "
             "(document_id, tenant_id, chunk_index, content, token_count, metadata) "
             "VALUES (:p0, :p1, 0, :p2, :p3, CAST('{}' AS jsonb))",
-            doc_row["id"], tenant_id, content, token_count,
+            doc_row["id"],
+            tenant_id,
+            content,
+            token_count,
         )
     return 1, 0, 0

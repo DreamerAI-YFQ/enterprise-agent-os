@@ -189,8 +189,25 @@ async def delete_session(
     principal: Principal = Depends(get_principal),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> None:
-    """Delete a session and its messages (ownership enforced)."""
-    await _fetch_owned_session(db, session_id, principal)
+    """Delete a session, its graph checkpoint, and invalidate resumable work."""
+    session = await _fetch_owned_session(db, session_id, principal)
+    thread_id = f"tenant:{session['tenant_id']}:agent:{session['agent_id']}:session:{session_id}"
+
+    # A deleted conversation must not leave an approval that can later resume
+    # an orphaned checkpoint.  Keep the approval row as audit evidence but make
+    # it terminal before removing state.
+    await db.execute(
+        "UPDATE harness.approvals SET status = 'expired' "
+        "WHERE session_id = :p0 AND tenant_id = :p1 "
+        "AND status IN ('pending', 'approved')",
+        session_id,
+        principal.tenant_id,
+    )
+    # AsyncPostgresSaver has no FK to agent.sessions.  Delete child rows first
+    # so session deletion removes both visible history and hidden graph state.
+    await db.execute("DELETE FROM checkpoint_writes WHERE thread_id = :p0", thread_id)
+    await db.execute("DELETE FROM checkpoint_blobs WHERE thread_id = :p0", thread_id)
+    await db.execute("DELETE FROM checkpoints WHERE thread_id = :p0", thread_id)
     await db.execute(
         "DELETE FROM agent.sessions WHERE id = :p0 AND tenant_id = :p1",
         session_id,
@@ -209,16 +226,14 @@ async def update_session(
     await _fetch_owned_session(db, session_id, principal)
     if body.title is not None:
         await db.execute(
-            "UPDATE agent.sessions SET title = :p0 "
-            "WHERE id = :p1 AND tenant_id = :p2",
+            "UPDATE agent.sessions SET title = :p0 WHERE id = :p1 AND tenant_id = :p2",
             body.title,
             session_id,
             principal.tenant_id,
         )
     if body.status is not None:
         await db.execute(
-            "UPDATE agent.sessions SET status = :p0 "
-            "WHERE id = :p1 AND tenant_id = :p2",
+            "UPDATE agent.sessions SET status = :p0 WHERE id = :p1 AND tenant_id = :p2",
             body.status,
             session_id,
             principal.tenant_id,
@@ -250,9 +265,7 @@ async def export_session(
         role = row["role"]
         content = row.get("content", "")
         ts = _iso(row.get("created_at")) or ""
-        role_label = {"user": "🧑 用户", "assistant": "🤖 助手", "system": "⚙️ 系统"}.get(
-            role, role
-        )
+        role_label = {"user": "🧑 用户", "assistant": "🤖 助手", "system": "⚙️ 系统"}.get(role, role)
         lines.append(f"### {role_label}")
         lines.append(f"*{ts}*")
         lines.append("")
@@ -287,8 +300,7 @@ async def auto_title_session(
         title = content[:30] + ("..." if len(content) > 30 else "")
 
     await db.execute(
-        "UPDATE agent.sessions SET title = :p0 "
-        "WHERE id = :p1 AND tenant_id = :p2",
+        "UPDATE agent.sessions SET title = :p0 WHERE id = :p1 AND tenant_id = :p2",
         title,
         session_id,
         principal.tenant_id,

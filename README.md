@@ -8,11 +8,15 @@
 # Install dependencies
 uv sync --all-packages
 
-# Start infrastructure (PostgreSQL + Redis + OTel)
-docker compose up -d
+# Copy local configuration and start the required infrastructure
+cp .env.example .env
+docker compose up -d postgres redis mock-saas
 
 # Run database migrations
 uv run alembic upgrade head
+
+# Seed a fresh local demo database (destructive: replaces existing demo data)
+uv run python -m eaos.infra.db.seed
 
 # Start API server
 uv run uvicorn eaos_api.main:app --reload
@@ -36,8 +40,8 @@ enterprise-agent-os/
 │   ├── observability/  # L6: Four-granularity trace, dashboard
 │   ├── harness/        # L7: Six governance pillars (core differentiator)
 │   └── evolution/      # Agentic RL: feedback, DPO, guardrail
-├── apps/               # Runnable applications (TODO)
-├── deploy/             # Deployment configs (TODO)
+├── apps/               # API, worker, CLI, and mock SaaS applications
+├── deploy/             # Docker, Kubernetes, and observability configs
 └── docs/               # Documentation
 ```
 

@@ -32,8 +32,12 @@ def _make_rewriter(
 
 def _make_node(node_type: NodeType = NodeType.OBJECT, name: str = "Customer") -> OntologyNode:
     return OntologyNode(
-        id=uuid4(), ontology_id=uuid4(), tenant_id=uuid4(),
-        node_type=node_type, name=name, properties={"table": "erp.customers"},
+        id=uuid4(),
+        ontology_id=uuid4(),
+        tenant_id=uuid4(),
+        node_type=node_type,
+        name=name,
+        properties={"table": "erp.customers"},
     )
 
 
@@ -46,11 +50,13 @@ class TestRewrite:
         llm.chat.assert_awaited_once()
 
     async def test_returns_parsed_result(self) -> None:
-        llm_content = json.dumps({
-            "rewritten": "查询所有客户的名称和信用额度",
-            "entities": [{"name": "Customer", "type": "object", "node_id": "abc"}],
-            "notes": "expanded to include credit_limit",
-        })
+        llm_content = json.dumps(
+            {
+                "rewritten": "查询所有客户的名称和信用额度",
+                "entities": [{"name": "Customer", "type": "object", "node_id": "abc"}],
+                "notes": "expanded to include credit_limit",
+            }
+        )
         rewriter, repo, _ = _make_rewriter(llm_content)
         node = _make_node()
         repo.search_nodes.return_value = [node]
@@ -105,3 +111,33 @@ class TestRewrite:
         repo.search_nodes.return_value = []
         await rewriter.rewrite("test", uuid4())
         llm.chat.assert_awaited_once()
+
+    async def test_llm_timeout_falls_back_to_original_query(self) -> None:
+        rewriter, repo, llm = _make_rewriter()
+        node = _make_node()
+        repo.search_nodes.return_value = [node]
+        llm.chat.side_effect = TimeoutError("provider timeout")
+
+        result = await rewriter.rewrite("original query", uuid4())
+
+        assert result.rewritten == "original query"
+        assert result.ontology_refs == [node.id]
+        assert "TimeoutError" in (result.expansion_notes or "")
+
+    async def test_ontology_failure_falls_back_without_calling_llm(self) -> None:
+        rewriter, repo, llm = _make_rewriter()
+        repo.search_nodes.side_effect = RuntimeError("database unavailable")
+
+        result = await rewriter.rewrite("original query", uuid4())
+
+        assert result.rewritten == "original query"
+        assert result.ontology_refs == []
+        llm.chat.assert_not_awaited()
+
+    async def test_blank_rewrite_falls_back_to_original_query(self) -> None:
+        rewriter, repo, _ = _make_rewriter('{"rewritten": "   ", "entities": []}')
+        repo.search_nodes.return_value = []
+
+        result = await rewriter.rewrite("original query", uuid4())
+
+        assert result.rewritten == "original query"

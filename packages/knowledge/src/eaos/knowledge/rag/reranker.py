@@ -8,7 +8,9 @@ original order.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from eaos.infra.llm.base import LLMResponse, Message
@@ -17,18 +19,27 @@ if TYPE_CHECKING:
     from eaos.infra.llm.router import LLMRouter
     from eaos.knowledge.rag.pipeline import Chunk
 
+
+logger = logging.getLogger(__name__)
+
 _SYSTEM_PROMPT = (
     "你是相关性排序专家。根据用户查询对候选文档片段按相关性从高到低排序。"
-    "只返回 JSON: {\"ranked\": [索引, ...]}，索引是候选文档的序号（从0开始）。"
+    '只返回 JSON: {"ranked": [索引, ...]}，索引是候选文档的序号（从0开始）。'
 )
 
 
 class LLMReranker:
     """Reranker backed by an LLMRouter call."""
 
-    def __init__(self, llm: LLMRouter, max_candidates: int = 20) -> None:
+    def __init__(
+        self,
+        llm: LLMRouter,
+        max_candidates: int = 20,
+        timeout_sec: float = 15.0,
+    ) -> None:
         self._llm = llm
         self._max_candidates = max_candidates
+        self._timeout_sec = timeout_sec
 
     async def rerank(
         self,
@@ -47,7 +58,16 @@ class LLMReranker:
             Message(role="system", content=_SYSTEM_PROMPT),
             Message(role="user", content=user_content),
         ]
-        response = await self._llm.chat(messages, temperature=0.0, task_type="rerank")
+        try:
+            async with asyncio.timeout(self._timeout_sec):
+                response = await self._llm.chat(
+                    messages,
+                    temperature=0.0,
+                    task_type="rerank",
+                )
+        except Exception:  # noqa: BLE001 - preserve the deterministic RRF order
+            logger.warning("LLM reranker failed; preserving RRF order", exc_info=True)
+            return candidates[:top_k]
         ranked_indices = self._parse_ranked(response)
         if ranked_indices is None:
             return candidates[:top_k]

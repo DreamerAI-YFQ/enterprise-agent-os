@@ -25,7 +25,7 @@ import httpx
 import pytest
 from eaos.data.connector import ReadQuery, WriteResult
 from eaos.data.mcp.registry import ToolRegistry
-from eaos.data.mcp.types import McpToolResult
+from eaos.data.mcp.types import McpTool, McpToolResult
 from eaos.harness.write_pipeline import (
     WriteApprovalRequired,
     WriteIntent,
@@ -43,6 +43,7 @@ from eaos.skills.spec import (
 
 TID = UUID("00000000-0000-0000-0000-000000000001")
 PRINCIPAL = UUID("00000000-0000-0000-0000-000000000201")
+APPROVER = UUID("00000000-0000-0000-0000-000000000202")
 AGENT = UUID("00000000-0000-0000-0000-000000000301")
 MOCK_SAAS_BASE_URL = "http://localhost:18000"
 MOCK_SAAS_API_KEY = "eaos-api-key-001"
@@ -64,8 +65,8 @@ def _mock_harness() -> Any:
 def _mock_approval_gate() -> Any:
     ag: Any = MagicMock()
     ag.request_approval = AsyncMock(return_value=uuid4())
-    # C13/Fix-3: WritePipeline now verifies approval status via check_approval
-    ag.check_approval = AsyncMock(return_value="approved")
+    ag.claim_for_execution = AsyncMock(return_value="executing")
+    ag.consume_after_execution = AsyncMock(return_value=None)
     return ag
 
 
@@ -181,15 +182,11 @@ class TestComponentWiring:
     async def test_rollback_on_write_failure(self) -> None:
         """Failed write with before snapshot triggers rollback + audit."""
         before = {"id": "ord-001", "amount": 500}
-        result = WriteResult(
-            success=False, before=before, error="constraint violation"
-        )
+        result = WriteResult(success=False, before=before, error="constraint violation")
         connector = _mock_connector(result)
         # C09: _verify_record_matches calls connector.read to verify rollback;
         # return a row matching the before snapshot so verification passes.
-        connector.read = AsyncMock(
-            return_value=MagicMock(rows=[before], total=1)
-        )
+        connector.read = AsyncMock(return_value=MagicMock(rows=[before], total=1))
         pipe, mocks = _make_write_pipeline(connector=connector)
 
         outcome = await pipe.execute(_write_intent(operation="update", record_id="ord-001"))
@@ -222,9 +219,7 @@ class TestComponentWiring:
         internal connector.
         """
         # Real ToolRegistry with a mocked internal connector
-        connector = _mock_connector(
-            WriteResult(success=True, after={"id": "ord-007"})
-        )
+        connector = _mock_connector(WriteResult(success=True, after={"id": "ord-007"}))
         registry = ToolRegistry()
         registry.register_internal("erp", connector)
 
@@ -249,11 +244,18 @@ class TestComponentWiring:
         # internal connectors (no "write" op). To test the binding path we
         # register a mock MCP client whose tool matches.
         mcp_client: Any = MagicMock()
-        mcp_client.list_tools = AsyncMock(return_value=[])
+        mcp_client.list_tools = AsyncMock(
+            return_value=[
+                McpTool(
+                    name="erp.create_order",
+                    description="Create an ERP order",
+                    input_schema={"type": "object"},
+                    source="mcp:erp",
+                )
+            ]
+        )
         mcp_client.call_tool = AsyncMock(
-            return_value=McpToolResult(
-                content=[{"type": "text", "text": '{"id": "ord-007"}'}]
-            )
+            return_value=McpToolResult(content=[{"type": "text", "text": '{"id": "ord-007"}'}])
         )
         mcp_client.health_check = AsyncMock(return_value=True)
         mcp_client.close = AsyncMock()
@@ -288,9 +290,7 @@ class TestComponentWiring:
             tool_bindings=[binding],
         )
 
-        result = await executor.execute(
-            skill, {"customer": "ACME", "total": 1_000_000}, ctx
-        )
+        result = await executor.execute(skill, {"customer": "ACME", "total": 1_000_000}, ctx)
 
         assert result.success is True
         mcp_client.call_tool.assert_awaited_once()
@@ -350,9 +350,7 @@ class TestM7Integration:
     Set ``EAOS_RUN_INTEGRATION=1`` to run.
     """
 
-    async def test_end_to_end_write_with_hitl_via_http(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_end_to_end_write_with_hitl_via_http(self, db: Any, live_stack: Any) -> None:
         """HTTP connector path: high-risk write → HITL interrupt → approve → resume → audit."""
         stack = live_stack
         session_id = uuid4()
@@ -376,7 +374,7 @@ class TestM7Integration:
         approval_id = exc_info.value.approval_id
 
         # Approve via the real ApprovalGateImpl (writes to harness.approvals).
-        await stack.approval_gate.approve(approval_id, PRINCIPAL)
+        await stack.approval_gate.approve(approval_id, APPROVER)
 
         # Resume with approval_id set → write proceeds.
         resume_intent = WriteIntent(
@@ -413,9 +411,7 @@ class TestM7Integration:
         assert entry.approval_id == approval_id
         assert entry.trace_id == trace_id
 
-    async def test_end_to_end_write_via_mcp(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_end_to_end_write_via_mcp(self, db: Any, live_stack: Any) -> None:
         """MCP path: ToolRegistry.call_tool → McpClient → erp_create_order → verify."""
         stack = live_stack
         result = await stack.tool_registry.call_tool(
@@ -440,23 +436,17 @@ class TestM7Integration:
         assert fetched["id"] == order_id
         assert fetched["customer_id"] == "cus_globex"
 
-    async def test_http_connector_read_query(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_http_connector_read_query(self, db: Any, live_stack: Any) -> None:
         """HTTP connector read: GET /api/v1/orders returns seeded orders (page 1)."""
         stack = live_stack
         query = ReadQuery(filters={}, limit=5, offset=0)
-        result = await stack.http_connector.read(
-            stack.tenant_id, "orders", query
-        )
+        result = await stack.http_connector.read(stack.tenant_id, "orders", query)
         assert result.total >= 20  # seed data has 20 orders
         assert len(result.rows) <= 5
         # Each row is an order dict with at least an id and customer_id.
         assert all("id" in row for row in result.rows)
 
-    async def test_write_rollback_on_failure(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_write_rollback_on_failure(self, db: Any, live_stack: Any) -> None:
         """Update with invalid customer → 422 → rollback restores original → audit logged."""
         stack = live_stack
         # Create a baseline order to attempt updating.
@@ -509,9 +499,7 @@ class TestM7Integration:
         assert entry is not None
         assert entry.success is False
 
-    async def test_skill_with_tool_bindings(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_skill_with_tool_bindings(self, db: Any, live_stack: Any) -> None:
         """Skill with tool_bindings → SkillExecutor → McpClient.call_tool → order created."""
         stack = live_stack
         from eaos.core.context import TenantContext
@@ -522,9 +510,7 @@ class TestM7Integration:
         monitor.record = AsyncMock()
         monitor.check_auto_deprecate = AsyncMock(return_value=False)
 
-        executor = SkillExecutorImpl(
-            llm, monitor, tool_registry=stack.tool_registry
-        )
+        executor = SkillExecutorImpl(llm, monitor, tool_registry=stack.tool_registry)
 
         binding = ToolBinding(
             tool_name="mock-saas.erp_create_order",
@@ -552,9 +538,7 @@ class TestM7Integration:
             agent_scope="personal",
         )
 
-        result = await executor.execute(
-            skill, {"customer": "cus_stark", "total": 3_333.0}, ctx
-        )
+        result = await executor.execute(skill, {"customer": "cus_stark", "total": 3_333.0}, ctx)
         assert result.success is True
         # LLM NOT called — tool_bindings path bypasses it.
         llm.chat.assert_not_awaited()
@@ -565,9 +549,7 @@ class TestM7Integration:
         assert created["customer_id"] == "cus_stark"
         assert float(created["amount"]) == 3_333.0
 
-    async def test_guardrail_blocks_unauthorized_write(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_guardrail_blocks_unauthorized_write(self, db: Any, live_stack: Any) -> None:
         """Harness.guard denies → PermissionDeniedError raised, no write, no audit."""
         stack = live_stack
         from eaos.core.errors import PermissionDeniedError
@@ -577,9 +559,7 @@ class TestM7Integration:
         denying_harness.guard = AsyncMock(
             side_effect=PermissionDeniedError("principal lacks write permission")
         )
-        denying_harness.post_guard = AsyncMock(
-            side_effect=lambda ctx, result: result
-        )
+        denying_harness.post_guard = AsyncMock(side_effect=lambda ctx, result: result)
 
         def _resolver(_name: str) -> Any:
             return stack.http_connector
@@ -614,14 +594,10 @@ class TestM7Integration:
         rejected = [e for e in entries if e.trace_id == intent.trace_id]
         assert rejected == []
 
-    async def test_sql_sandbox_readonly_enforced(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_sql_sandbox_readonly_enforced(self, db: Any, live_stack: Any) -> None:
         """INSERT via sandbox → SET TRANSACTION READ ONLY rejects → no row added."""
         stack = live_stack
-        before_rows = await stack.db.fetch(
-            "SELECT count(*) AS n FROM harness.write_audit"
-        )
+        before_rows = await stack.db.fetch("SELECT count(*) AS n FROM harness.write_audit")
         before_count = int(before_rows[0]["n"])
 
         # A syntactically valid INSERT that READ ONLY must reject at the engine.
@@ -635,16 +611,12 @@ class TestM7Integration:
         # Errors are swallowed → empty list returned.
         assert result == []
 
-        after_rows = await stack.db.fetch(
-            "SELECT count(*) AS n FROM harness.write_audit"
-        )
+        after_rows = await stack.db.fetch("SELECT count(*) AS n FROM harness.write_audit")
         after_count = int(after_rows[0]["n"])
         # No row was inserted — READ ONLY transaction blocked the write.
         assert after_count == before_count
 
-    async def test_tenant_isolation_internal(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_tenant_isolation_internal(self, db: Any, live_stack: Any) -> None:
         """Audit tenant scoping: tenant A entry invisible to tenant B query."""
         stack = live_stack
         other_tenant = UUID("00000000-0000-0000-0000-000000000002")
@@ -677,17 +649,11 @@ class TestM7Integration:
         assert len(own) == 1
         assert own[0].tenant_id == stack.tenant_id
 
-    async def test_connection_health_check(
-        self, db: Any, live_stack: Any
-    ) -> None:
+    async def test_connection_health_check(self, db: Any, live_stack: Any) -> None:
         """Register http_api + mcp_stdio → health-check both → healthy."""
         stack = live_stack
-        http_status = await stack.connection_manager.health_check(
-            stack.http_conn_id
-        )
+        http_status = await stack.connection_manager.health_check(stack.http_conn_id)
         assert http_status.status == "healthy"
 
-        mcp_status = await stack.connection_manager.health_check(
-            stack.mcp_conn_id
-        )
+        mcp_status = await stack.connection_manager.health_check(stack.mcp_conn_id)
         assert mcp_status.status == "healthy"

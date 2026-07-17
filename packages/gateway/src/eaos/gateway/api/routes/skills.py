@@ -1,7 +1,8 @@
 """Skill API — personal skill CRUD + admin management.
 
 Employee routes (``/skills``):
-- ``GET /skills`` — list all skills visible to the user (personal + department + company published + own drafts)
+- ``GET /skills`` — list all skills visible to the user
+  (personal + department + company published + own drafts)
 - ``GET /skills/{id}`` — detail
 - ``POST /skills`` — create a personal skill (scope=PERSONAL)
 - ``PUT /skills/{id}`` — update name/description/instructions/etc.
@@ -149,9 +150,7 @@ async def list_my_skills(
     An optional ``scope`` filter narrows the result to one tier.
     """
     # resolve_for_user returns only published skills across all three scopes.
-    published = await resolver.resolve_for_user(
-        principal.tenant_id, principal.user_id
-    )
+    published = await resolver.resolve_for_user(principal.tenant_id, principal.user_id)
 
     # Also fetch user's own draft/deprecated personal skills (not in published set).
     own_filters: dict[str, Any] = {"scope": "personal", "owner_id": principal.user_id}
@@ -286,9 +285,7 @@ async def deprecate_own_skill(
     if current.owner_id != principal.user_id and principal.role != "admin":
         raise HTTPException(status_code=403, detail="only the owner can deprecate this skill")
     if current.status != "published":
-        raise HTTPException(
-            status_code=409, detail="only published skills can be deprecated"
-        )
+        raise HTTPException(status_code=409, detail="only published skills can be deprecated")
 
     await registry.deprecate(skill_id, principal.tenant_id, body.reason)
     return {"status": "deprecated"}

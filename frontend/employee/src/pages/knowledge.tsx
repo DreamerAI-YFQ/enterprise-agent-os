@@ -363,7 +363,7 @@ function MyContributionsTab() {
     },
   });
 
-  const allContributions = data ?? [];
+  const allContributions = useMemo(() => data ?? [], [data]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return allContributions;

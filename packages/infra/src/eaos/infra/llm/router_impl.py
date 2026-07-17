@@ -13,15 +13,34 @@ order: anthropic > openai > glm.
 
 from __future__ import annotations
 
+import contextvars
+import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from eaos.core.errors import LLMError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from eaos.infra.llm.base import LLMClient, LLMResponse, Message
     from eaos.infra.llm.router import TenantModelRouting
+
+
+@dataclass(frozen=True)
+class LLMUsageRecord:
+    """One routed LLM call captured for run-level usage evidence."""
+
+    provider: str
+    model: str
+    task_type: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    latency_ms: int
+    success: bool
+    error_type: str | None = None
 
 
 class LLMRouterImpl:
@@ -44,9 +63,33 @@ class LLMRouterImpl:
         self._default_provider = default_provider
         self._default_model = default_model
         self._vision_model_override = vision_model_override
+        self._usage_capture: contextvars.ContextVar[list[LLMUsageRecord] | None] = (
+            contextvars.ContextVar("eaos_llm_usage_capture", default=None)
+        )
 
     def register_adapter(self, adapter: LLMClient) -> None:
         self._adapters[adapter.provider] = adapter
+
+    @asynccontextmanager
+    async def capture_usage(self) -> AsyncGenerator[list[LLMUsageRecord], None]:
+        """Capture all chat calls made in the current async execution context.
+
+        A mutable list is intentionally shared with child tasks created inside
+        the context so fan-out orchestration contributes to the same run total.
+        Nested captures remain isolated and context state is always restored.
+        """
+
+        records: list[LLMUsageRecord] = []
+        token = self._usage_capture.set(records)
+        try:
+            yield records
+        finally:
+            self._usage_capture.reset(token)
+
+    def _record_usage(self, record: LLMUsageRecord) -> None:
+        capture = self._usage_capture.get()
+        if capture is not None:
+            capture.append(record)
 
     @staticmethod
     def _parse_hint(hint: str) -> tuple[str, str]:
@@ -98,9 +141,39 @@ class LLMRouterImpl:
         temperature: float = 0.7,
     ) -> LLMResponse:
         adapter, model = self._resolve(model_hint, task_type, tenant_routing)
-        return await adapter.chat(
-            messages, model=model, temperature=temperature, tools=tools
+        started = time.perf_counter()
+        try:
+            response = await adapter.chat(
+                messages, model=model, temperature=temperature, tools=tools
+            )
+        except Exception as exc:
+            self._record_usage(
+                LLMUsageRecord(
+                    provider=adapter.provider,
+                    model=model,
+                    task_type=task_type,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    success=False,
+                    error_type=type(exc).__name__,
+                )
+            )
+            raise
+        self._record_usage(
+            LLMUsageRecord(
+                provider=adapter.provider,
+                model=response.model or model,
+                task_type=task_type,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                total_tokens=response.total_tokens,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                success=True,
+            )
         )
+        return response
 
     async def stream(
         self,
@@ -112,9 +185,7 @@ class LLMRouterImpl:
         temperature: float = 0.7,
     ) -> AsyncIterator[str]:
         adapter, model = self._resolve(model_hint, task_type, tenant_routing)
-        async for token in adapter.stream(
-            messages, model=model, temperature=temperature
-        ):
+        async for token in adapter.stream(messages, model=model, temperature=temperature):
             yield token
 
     async def vision(self, image: bytes, prompt: str) -> str:

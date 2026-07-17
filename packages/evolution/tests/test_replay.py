@@ -6,8 +6,6 @@ import json
 from typing import Any
 from uuid import UUID, uuid4
 
-import pytest
-
 from eaos.evolution.replay import TraceReplayerImpl
 
 

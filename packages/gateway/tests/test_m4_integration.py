@@ -194,6 +194,9 @@ def _make_app(db: DbClient, llm: LLMRouter) -> Any:
     gov = _make_governance(db)
 
     app.state.runner = runner
+    # Text-only invoke can use the runner directly; the route intentionally
+    # treats an identical runner/orchestrator object as single-agent mode.
+    app.state.orchestrator = runner
     app.state.tracer = gov["tracer"]
     app.state.harness = gov["harness"]
     app.state.trace_query = gov["trace_query"]
@@ -389,7 +392,9 @@ class TestGuarded:
                 "/admin/approvals", headers={"Authorization": f"Bearer {token}"}
             )
         assert response.status_code == 200
-        assert isinstance(response.json(), list)
+        payload = response.json()
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("items"), list)
 
     async def test_cost_quota_exceeded_blocked(self, db: DbClient) -> None:
         from eaos.harness.context import GuardContext

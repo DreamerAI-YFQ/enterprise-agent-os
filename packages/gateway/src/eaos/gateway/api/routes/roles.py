@@ -17,11 +17,10 @@ from typing import Any
 
 from eaos.core.auth import Principal  # noqa: TC002 — runtime for FastAPI
 from eaos.gateway.api.deps import get_db
+from eaos.gateway.api.routes.admin import require_admin
 from eaos.infra.db.base import DbClient  # noqa: TC002 — runtime for FastAPI
 from fastapi import APIRouter, Depends, HTTPException  # noqa: TC002
 from pydantic import BaseModel
-
-from eaos.gateway.api.routes.admin import require_admin
 
 router = APIRouter(prefix="/admin")
 
@@ -42,33 +41,73 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {
         "group": "业务中心",
         "resources": [
-            {"resource": "agent", "label": "Agent", "actions": ["create", "read", "update", "delete", "execute"]},
-            {"resource": "workflow", "label": "工作流", "actions": ["create", "read", "update", "delete", "execute"]},
+            {
+                "resource": "agent",
+                "label": "Agent",
+                "actions": ["create", "read", "update", "delete", "execute"],
+            },
+            {
+                "resource": "workflow",
+                "label": "工作流",
+                "actions": ["create", "read", "update", "delete", "execute"],
+            },
             {"resource": "approval", "label": "审批", "actions": ["read", "approve", "reject"]},
         ],
     },
     {
         "group": "技能与记忆",
         "resources": [
-            {"resource": "skill", "label": "技能", "actions": ["create", "read", "update", "delete", "execute", "publish"]},
-            {"resource": "memory", "label": "记忆", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "promotion", "label": "技能晋升", "actions": ["create", "read", "approve", "reject"]},
+            {
+                "resource": "skill",
+                "label": "技能",
+                "actions": ["create", "read", "update", "delete", "execute", "publish"],
+            },
+            {
+                "resource": "memory",
+                "label": "记忆",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "promotion",
+                "label": "技能晋升",
+                "actions": ["create", "read", "approve", "reject"],
+            },
         ],
     },
     {
         "group": "知识中心",
         "resources": [
-            {"resource": "document", "label": "文档", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "ontology", "label": "本体", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "knowledge.contribution", "label": "知识贡献", "actions": ["submit", "read", "review", "delete"]},
+            {
+                "resource": "document",
+                "label": "文档",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "ontology",
+                "label": "本体",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "knowledge.contribution",
+                "label": "知识贡献",
+                "actions": ["submit", "read", "review", "delete"],
+            },
         ],
     },
     {
         "group": "BI 与数据",
         "resources": [
-            {"resource": "datasource", "label": "数据源", "actions": ["create", "read", "update", "delete"]},
+            {
+                "resource": "datasource",
+                "label": "数据源",
+                "actions": ["create", "read", "update", "delete"],
+            },
             {"resource": "bi_query", "label": "自然语言查询", "actions": ["read", "execute"]},
-            {"resource": "connection", "label": "外部连接", "actions": ["create", "read", "update", "delete", "test"]},
+            {
+                "resource": "connection",
+                "label": "外部连接",
+                "actions": ["create", "read", "update", "delete", "test"],
+            },
         ],
     },
     {
@@ -77,37 +116,73 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
             {"resource": "audit_log", "label": "审计日志", "actions": ["read", "export"]},
             {"resource": "metric", "label": "指标", "actions": ["read", "export"]},
             {"resource": "trace", "label": "链路追踪", "actions": ["read"]},
-            {"resource": "safety_case", "label": "安全评估", "actions": ["create", "read", "update", "delete"]},
+            {
+                "resource": "safety_case",
+                "label": "安全评估",
+                "actions": ["create", "read", "update", "delete"],
+            },
         ],
     },
     {
         "group": "配置中心",
         "resources": [
-            {"resource": "model", "label": "模型", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "trigger", "label": "调度", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "report_template", "label": "报告模板", "actions": ["create", "read", "update", "delete"]},
-            {"resource": "plugin", "label": "插件", "actions": ["create", "read", "update", "delete"]},
+            {
+                "resource": "model",
+                "label": "模型",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "trigger",
+                "label": "调度",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "report_template",
+                "label": "报告模板",
+                "actions": ["create", "read", "update", "delete"],
+            },
+            {
+                "resource": "plugin",
+                "label": "插件",
+                "actions": ["create", "read", "update", "delete"],
+            },
         ],
     },
     {
         "group": "用户与租户",
         "resources": [
-            {"resource": "user", "label": "用户", "actions": ["create", "read", "update", "delete", "invite", "reset_password"]},
-            {"resource": "department", "label": "部门", "actions": ["create", "read", "update", "delete"]},
+            {
+                "resource": "user",
+                "label": "用户",
+                "actions": ["create", "read", "update", "delete", "invite", "reset_password"],
+            },
+            {
+                "resource": "department",
+                "label": "部门",
+                "actions": ["create", "read", "update", "delete"],
+            },
             {"resource": "role", "label": "角色权限", "actions": ["read", "update"]},
         ],
     },
     {
         "group": "会话与通知",
         "resources": [
-            {"resource": "session", "label": "会话", "actions": ["read", "update", "delete", "export"]},
+            {
+                "resource": "session",
+                "label": "会话",
+                "actions": ["read", "update", "delete", "export"],
+            },
             {"resource": "notification", "label": "通知", "actions": ["read", "update"]},
         ],
     },
     {
         "group": "系统",
         "resources": [
-            {"resource": "data_management", "label": "数据管理", "actions": ["read", "export", "import"]},
+            {
+                "resource": "data_management",
+                "label": "数据管理",
+                "actions": ["read", "export", "import"],
+            },
         ],
     },
 ]
@@ -124,6 +199,7 @@ class PermissionEntry(BaseModel):
 
 class PermissionUpdateRequest(BaseModel):
     """Replace the full permission set for one role."""
+
     permissions: list[PermissionEntry]
 
 
@@ -229,7 +305,8 @@ async def replace_role_permissions(
         await db.execute(
             'INSERT INTO iam.permissions (tenant_id, role, resource, action, "constraint") '
             "VALUES (:p0, :p1, :p2, :p3, CAST(:p4 AS jsonb)) "
-            'ON CONFLICT (tenant_id, role, resource, action) DO UPDATE SET "constraint" = EXCLUDED."constraint"',
+            "ON CONFLICT (tenant_id, role, resource, action) DO UPDATE "
+            'SET "constraint" = EXCLUDED."constraint"',
             principal.tenant_id,
             role,
             entry.resource,

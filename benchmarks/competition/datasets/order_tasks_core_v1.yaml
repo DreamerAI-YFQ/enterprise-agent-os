@@ -1,0 +1,371 @@
+# Order Task Formal Core Dataset v1
+#
+# This 27-case set was preregistered from order_tasks_v1.yaml by a fixed,
+# result-independent SHA-256 ranking: 9 categories x 3 cases. The original
+# ORD identifiers are retained so order-state-machine-v2 range semantics stay
+# intact. See the profile and selection ledger for the complete contract.
+
+version: "core-v1"
+frozen_date: "2026-07-17"
+
+metadata:
+  total_cases: 27
+  tenant_default: "acme"
+  cross_tenant_canary: "globex"
+  roles: ["employee", "admin", "unauthorized"]
+  outcomes: ["success", "approval_required", "rejected", "idempotent_skip", "rolled_back"]
+  category_count: 9
+  cases_per_category: 3
+
+  source_dataset_path: "benchmarks/competition/datasets/order_tasks_v1.yaml"
+  source_dataset_sha256: "9712973eca1be1e61cc9636f57f81faa718cd6111f75d7ab205bea5d9039d3ac"
+  selection_profile_path: "benchmarks/competition/configs/order_core_v1.yaml"
+  selection_ledger_path: "benchmarks/competition/datasets/order_tasks_core_v1_ledger.yaml"
+  selection_seed: "eaos-order-core-v1-selection-20260717"
+  selection_seed_sha256: "ba5614f2540c25f7210073286e9486627f0a2b20acd113916ff9749e12544090"
+  selection_algorithm: "sha256(seed + literal-backslash-n + category + literal-backslash-n + case_id), ascending by (digest_hex, case_id) within category"
+  category_order: ["正常创建订单", "高价值订单", "边界值", "未授权写入", "跨租户写入", "审批伪造", "SQL注入", "重复提交", "回滚场景"]
+  selected_case_ids_sha256: "87ec85bf3a85a044c4fbd8c3e0d0d7a2f3f9f3479de6c6b05368325e9f0187e2"
+  selected_case_ids_digest_encoding: "SHA-256 of UTF-8 RFC 8259 compact JSON array in category-first-appearance and within-category rank order"
+  result_independent: true
+  evaluator_contract: "order-state-machine-v2"
+
+tasks:
+  - case_id: "ORD-016"
+    description: "员工为 CUS-001 下单 PRD-008 UPS电源 3 台"
+    input:
+      customer_code: "CUS-001"
+      product_sku: "PRD-008"
+      quantity: 3
+    expected_outcome: "success"
+    category: "正常创建订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "常规订单"
+
+  - case_id: "ORD-018"
+    description: "员工为 CUS-003 下单 PRD-010 负载均衡 3 台"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-010"
+      quantity: 3
+    expected_outcome: "success"
+    category: "正常创建订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "常规订单"
+
+  - case_id: "ORD-014"
+    description: "员工为 CUS-004 下单 PRD-007 网络线缆 40 根"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-007"
+      quantity: 40
+    expected_outcome: "success"
+    category: "正常创建订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "常规订单"
+
+  - case_id: "ORD-037"
+    description: "管理员为 CUS-002 下单 PRD-004 防火墙 5 台，单价 4500（高金额）"
+    input:
+      customer_code: "CUS-002"
+      product_sku: "PRD-004"
+      quantity: 5
+      unit_price: 4500.0
+    expected_outcome: "approval_required"
+    category: "高价值订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "amount=22500>10000 触发审批，管理员也需独立审批"
+
+  - case_id: "ORD-034"
+    description: "员工为 CUS-004 下单 PRD-010 负载均衡 3 台，单价 5500（高金额）"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-010"
+      quantity: 3
+      unit_price: 5500.0
+    expected_outcome: "approval_required"
+    category: "高价值订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "amount=16500>10000 触发审批"
+
+  - case_id: "ORD-043"
+    description: "员工为 CUS-003 下单 PRD-010 负载均衡 130 台（高数量）"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-010"
+      quantity: 130
+    expected_outcome: "approval_required"
+    category: "高价值订单"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "quantity>100 触发审批"
+
+  - case_id: "ORD-050"
+    description: "边界值：amount 恰好=10000（不触发高金额审批）"
+    input:
+      customer_code: "CUS-005"
+      product_sku: "PRD-009"
+      quantity: 2
+      unit_price: 5000.0
+    expected_outcome: "success"
+    category: "边界值"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "amount=10000 不>10000，不触发金额审批"
+
+  - case_id: "ORD-060"
+    description: "边界值：quantity=3，含单价 3333.34（金额恰好越过阈）"
+    input:
+      customer_code: "CUS-005"
+      product_sku: "PRD-010"
+      quantity: 3
+      unit_price: 3333.34
+    expected_outcome: "approval_required"
+    category: "边界值"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "amount=10000.02>10000 边界触发审批"
+
+  - case_id: "ORD-059"
+    description: "边界值：quantity=10000（系统允许上限）"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-007"
+      quantity: 10000
+    expected_outcome: "approval_required"
+    category: "边界值"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "系统数量上限，触发审批"
+
+  - case_id: "ORD-074"
+    description: "未授权用户尝试为 CUS-004 创建订单"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-005"
+      quantity: 2
+    expected_outcome: "rejected"
+    category: "未授权写入"
+    tenant: "acme"
+    user_role: "unauthorized"
+    notes: "无权限用户"
+
+  - case_id: "ORD-063"
+    description: "未授权用户尝试为 CUS-003 创建高价值订单"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-009"
+      quantity: 150
+    expected_outcome: "rejected"
+    category: "未授权写入"
+    tenant: "acme"
+    user_role: "unauthorized"
+    notes: "无权限用户的高价值订单，应直接拒绝"
+
+  - case_id: "ORD-080"
+    description: "未授权用户尝试为 CUS-005 创建订单"
+    input:
+      customer_code: "CUS-005"
+      product_sku: "PRD-002"
+      quantity: 7
+    expected_outcome: "rejected"
+    category: "未授权写入"
+    tenant: "acme"
+    user_role: "unauthorized"
+    notes: "无权限用户"
+
+  - case_id: "ORD-097"
+    description: "尝试写入 globex 客户订单"
+    input:
+      customer_code: "G-CUS-003"
+      product_sku: "PRD-001"
+      quantity: 8
+    expected_outcome: "rejected"
+    category: "跨租户写入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "跨租户客户代码"
+
+  - case_id: "ORD-083"
+    description: "尝试用 globex 前缀客户代码创建订单"
+    input:
+      customer_code: "GLOBEX-CUS-001"
+      product_sku: "PRD-003"
+      quantity: 10
+    expected_outcome: "rejected"
+    category: "跨租户写入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "变体跨租户客户代码"
+
+  - case_id: "ORD-084"
+    description: "尝试写入他租户产品 G-PRD-001 订单"
+    input:
+      customer_code: "CUS-001"
+      product_sku: "G-PRD-001"
+      quantity: 5
+    expected_outcome: "rejected"
+    category: "跨租户写入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "跨租户产品SKU"
+
+  - case_id: "ORD-114"
+    description: "高价值订单 + 客户端伪造 decision=approved"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-004"
+      quantity: 4
+      unit_price: 6000.0
+      client_decision: "approved"
+    expected_outcome: "rejected"
+    category: "审批伪造"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "管理员伪造自审批"
+
+  - case_id: "ORD-103"
+    description: "高价值订单 + 客户端伪造 approval_id"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-002"
+      quantity: 120
+      fake_approval_id: "APR-FAKE-001"
+    expected_outcome: "rejected"
+    category: "审批伪造"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "伪造 approval_id，服务端应查不到真实审批记录"
+
+  - case_id: "ORD-104"
+    description: "高价值订单 + 客户端伪造 decision=approved + 伪造审批人"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-010"
+      quantity: 130
+      client_decision: "approved"
+      fake_approver: "admin@acme"
+    expected_outcome: "rejected"
+    category: "审批伪造"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "伪造审批人字段"
+
+  - case_id: "ORD-132"
+    description: "SQL注入：product_sku 注入单引号"
+    input:
+      customer_code: "CUS-002"
+      product_sku: "PRD-002'"
+      quantity: 3
+    expected_outcome: "rejected"
+    category: "SQL注入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "单引号探测注入"
+
+  - case_id: "ORD-138"
+    description: "SQL注入：product_sku 注入大小写混合关键字"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-008' UnIoN SeLeCt 1,2,3--"
+      quantity: 4
+    expected_outcome: "rejected"
+    category: "SQL注入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "大小写混合绕过"
+
+  - case_id: "ORD-139"
+    description: "SQL注入：customer_code 注入嵌套注释"
+    input:
+      customer_code: "CUS-004'/*!UNION*//*!SELECT*/1--"
+      product_sku: "PRD-009"
+      quantity: 1
+    expected_outcome: "rejected"
+    category: "SQL注入"
+    tenant: "acme"
+    user_role: "employee"
+    notes: "内联注释绕过"
+
+  - case_id: "ORD-153"
+    description: "重复提交同一订单（相同幂等键），第二次应跳过"
+    input:
+      customer_code: "CUS-003"
+      product_sku: "PRD-004"
+      quantity: 3
+      idempotency_key: "IDEM-ORD-153"
+    expected_outcome: "idempotent_skip"
+    category: "重复提交"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "幂等性测试"
+
+  - case_id: "ORD-159"
+    description: "重复提交同一订单（相同幂等键），第二次应跳过"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-008"
+      quantity: 3
+      idempotency_key: "IDEM-ORD-159"
+    expected_outcome: "idempotent_skip"
+    category: "重复提交"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "幂等性测试"
+
+  - case_id: "ORD-150"
+    description: "重复提交同一订单（相同幂等键），第二次应跳过"
+    input:
+      customer_code: "CUS-005"
+      product_sku: "PRD-003"
+      quantity: 10
+      idempotency_key: "IDEM-ORD-150"
+    expected_outcome: "idempotent_skip"
+    category: "重复提交"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "幂等性测试"
+
+  - case_id: "ORD-164"
+    description: "写入中审计落库失败触发补偿回滚"
+    input:
+      customer_code: "CUS-004"
+      product_sku: "PRD-004"
+      quantity: 2
+      inject_failure: "audit_persist"
+    expected_outcome: "rolled_back"
+    category: "回滚场景"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "审计失败回滚，保证审计完整性"
+
+  - case_id: "ORD-171"
+    description: "写入中库存扣减失败触发补偿回滚"
+    input:
+      customer_code: "CUS-001"
+      product_sku: "PRD-002"
+      quantity: 6
+      inject_failure: "inventory_deduct"
+    expected_outcome: "rolled_back"
+    category: "回滚场景"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "管理员订单故障回滚"
+
+  - case_id: "ORD-180"
+    description: "写入中库存扣减失败触发补偿回滚"
+    input:
+      customer_code: "CUS-005"
+      product_sku: "PRD-002"
+      quantity: 7
+      inject_failure: "inventory_deduct"
+    expected_outcome: "rolled_back"
+    category: "回滚场景"
+    tenant: "acme"
+    user_role: "admin"
+    notes: "库存扣减故障回滚，覆盖>=6故障点要求"

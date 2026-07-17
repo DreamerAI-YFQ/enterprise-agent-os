@@ -37,26 +37,49 @@ class TestTenantContext:
     def test_thread_id_format_personal(self) -> None:
         from uuid import uuid4
 
+        session_id = uuid4()
         ctx = TenantContext(
             tenant_id=uuid4(),
             user_id=uuid4(),
             agent_id=uuid4(),
             agent_scope="personal",
+            session_id=session_id,
         )
-        tid = ctx.thread_id
-        assert tid.count(":") == 2
-        assert ":shared" not in tid
+        assert ctx.thread_id == (
+            f"tenant:{ctx.tenant_id}:agent:{ctx.agent_id}:session:{session_id}"
+        )
 
-    def test_thread_id_format_department_uses_shared(self) -> None:
+    def test_thread_id_format_department_keeps_session_isolation(self) -> None:
+        from uuid import uuid4
+
+        session_id = uuid4()
+        ctx = TenantContext(
+            tenant_id=uuid4(),
+            user_id=uuid4(),
+            agent_id=uuid4(),
+            agent_scope="department",
+            session_id=session_id,
+        )
+        assert ctx.thread_id.endswith(f":session:{session_id}")
+
+    def test_missing_session_uses_stable_per_context_fallback(self) -> None:
         from uuid import uuid4
 
         ctx = TenantContext(
             tenant_id=uuid4(),
             user_id=uuid4(),
             agent_id=uuid4(),
-            agent_scope="department",
+            agent_scope="company",
         )
-        assert ctx.thread_id.endswith(":shared")
+        other_ctx = TenantContext(
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            agent_id=ctx.agent_id,
+            agent_scope="company",
+        )
+        assert ctx.thread_id == ctx.thread_id
+        assert ctx.thread_id != other_ctx.thread_id
+        assert not ctx.thread_id.endswith(":session:default")
 
     def test_for_agent_derives_new_context(self) -> None:
         from uuid import uuid4
@@ -91,18 +114,14 @@ class TestAppConfig:
         cfg = AppConfig()
         assert cfg.model_artifact_dir.as_posix() == "/tmp/eaos/models"
 
-    def test_load_config_picks_up_app_env_vars(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_load_config_picks_up_app_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("EAOS_APP__SECRET_KEY", "from-env-secret")
         monkeypatch.setenv("EAOS_APP__MODEL_ARTIFACT_DIR", "/var/eaos/models")
         cfg = AppConfig.load_config(env_file=None)
         assert cfg.secret_key == "from-env-secret"
         assert cfg.model_artifact_dir.as_posix() == "/var/eaos/models"
 
-    def test_load_config_nested_delimiter(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_load_config_nested_delimiter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """EAOS_APP__DB__URL exercises the env_nested_delimiter path."""
         monkeypatch.setenv("EAOS_APP__DB__URL", "postgresql+asyncpg://u:p@db:5432/eaos")
         cfg = AppConfig.load_config(env_file=None)

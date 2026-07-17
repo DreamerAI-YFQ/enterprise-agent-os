@@ -18,7 +18,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4  # noqa: TC003 — Pydantic needs UUID at runtime
 
 from eaos.agent.runner import AgentEvent  # noqa: TC002 — runtime for error events
@@ -118,8 +118,7 @@ async def _resolve_or_create_session(
     if session_id is not None:
         if principal.role == "admin":
             row = await db.fetch_one(
-                "SELECT id FROM agent.sessions "
-                "WHERE id = :p0 AND tenant_id = :p1",
+                "SELECT id FROM agent.sessions WHERE id = :p0 AND tenant_id = :p1",
                 session_id,
                 principal.tenant_id,
             )
@@ -180,6 +179,30 @@ async def _touch_session(db: DbClient, session_id: UUID) -> None:
     )
 
 
+@asynccontextmanager
+async def _capture_llm_usage(request: Request) -> AsyncIterator[list[Any]]:
+    """Capture request-local LLM usage when the wired router supports it."""
+    deps = getattr(request.app.state, "_deps", None)
+    llm = getattr(deps, "llm", None)
+    capture = getattr(llm, "capture_usage", None)
+    if capture is None:
+        yield []
+        return
+    async with capture() as records:
+        yield records
+
+
+def _attach_llm_usage(span_handle: Any, records: list[Any]) -> None:
+    """Attach token evidence to the outer trace without inventing USD cost."""
+    if not records:
+        return
+    details = [asdict(record) for record in records]
+    total_tokens = sum(int(item.get("total_tokens", 0)) for item in details)
+    span_handle.set_cost(total_tokens, None)
+    span_handle.set_attribute("llm_call_count", len(details))
+    span_handle.set_attribute("llm_usage", details)
+
+
 # -- Routes -------------------------------------------------------------------
 
 
@@ -223,16 +246,21 @@ async def invoke(
     # hardcoding agent_scope="personal" with empty department_ids.
     department_ids: list[UUID] = []
     try:
-        dept_rows = await db.fetch_all(
-            "SELECT department_id FROM iam.department_members "
-            "WHERE user_id = :p0 AND tenant_id = :p1",
+        dept_rows = await db.fetch(
+            "SELECT m.department_id FROM iam.memberships AS m "
+            "JOIN iam.departments AS d ON d.id = m.department_id "
+            "WHERE m.user_id = :p0 AND d.tenant_id = :p1",
             principal.user_id,
             principal.tenant_id,
         )
         if dept_rows:
             department_ids = [r["department_id"] for r in dept_rows]
-    except Exception:  # noqa: BLE001 — departments are best-effort
-        logger.warning("failed to load departments for user %s", principal.user_id)
+    except Exception as exc:
+        logger.exception("failed to load departments for user %s", principal.user_id)
+        raise HTTPException(
+            status_code=503,
+            detail="unable to resolve tenant-scoped department memberships",
+        ) from exc
 
     ctx = TenantContext(
         tenant_id=principal.tenant_id,
@@ -270,34 +298,35 @@ async def invoke(
         # Trace the agent invocation (persisted to trace.spans for observability)
         span_cm = asynccontextmanager(tracer.span)
         try:
-            async with span_cm(
-                "agent.invoke",
-                Granularity.TASK,
-                ctx,
-                agent_id=str(ctx.agent_id),
-                session_id=str(ctx.session_id) if ctx.session_id else None,
-                user_id=str(ctx.user_id) if ctx.user_id else None,
-            ) as span_handle:
-                # C12/GAP-01: Route through Orchestrator for multi-agent support.
-                # Orchestrator analyzes the task and decides:
-                # - SINGLE → delegates to AgentRunner (same as before)
-                # - RELAY/FAN_OUT_IN/DEBATE/HIERARCHICAL → multi-agent collaboration
-                # Attachments are only supported in SINGLE mode (passed to runner).
-                if attachments:
-                    # Attachments require direct runner access (Orchestrator doesn't support them)
-                    stream = runner.invoke(
-                        ctx,
-                        body.message,
-                        attachments=attachments or None,
-                    )
-                else:
-                    # C12: Use Orchestrator for all text-only invocations
-                    stream = orchestrator.execute(ctx, body.message)
-                async for event in stream:
-                    if event.type == "final" and event.content:
-                        final_content = event.content
-                        span_handle.set_attribute("final_content_length", len(event.content))
-                    yield f"data: {_serialize_event(event)}\n\n"
+            async with (
+                span_cm(
+                    "agent.invoke",
+                    Granularity.TASK,
+                    ctx,
+                    agent_id=str(ctx.agent_id),
+                    session_id=str(ctx.session_id) if ctx.session_id else None,
+                    user_id=str(ctx.user_id) if ctx.user_id else None,
+                ) as span_handle,
+                _capture_llm_usage(request) as usage_records,
+            ):
+                try:
+                    # Attachments require direct runner access; text-only
+                    # requests normally use the orchestrator.
+                    if attachments or cast("object", orchestrator) is runner:
+                        stream = runner.invoke(
+                            ctx,
+                            body.message,
+                            attachments=attachments or None,
+                        )
+                    else:
+                        stream = orchestrator.execute(ctx, body.message)
+                    async for event in stream:
+                        if event.type == "final" and event.content:
+                            final_content = event.content
+                            span_handle.set_attribute("final_content_length", len(event.content))
+                        yield f"data: {_serialize_event(event)}\n\n"
+                finally:
+                    _attach_llm_usage(span_handle, usage_records)
         except PermissionDeniedError as exc:
             yield f"data: {_error_event(exc)}\n\n"
         # Best-effort: persist the assistant's final response.
@@ -331,9 +360,11 @@ async def invoke(
 async def interrupt_resume(
     session_id: UUID,
     body: ResumeRequest,
+    request: Request,
     principal: Principal = Depends(get_principal),  # noqa: B008
     runner: AgentRunner = Depends(get_runner),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
+    tracer: Tracer = Depends(get_tracer),  # noqa: B008
 ) -> StreamingResponse:
     """Resume a paused high-risk skill after HITL approval.
 
@@ -350,7 +381,9 @@ async def interrupt_resume(
     # C02/GAP-05: Query the REAL approval status from the database.
     # Client-supplied ``decision`` is never trusted.
     approval_row = await db.fetch_one(
-        """SELECT id, tenant_id, session_id, status, agent_id
+        """SELECT id, tenant_id, session_id, status, agent_id, skill_id,
+                  requested_by, tool_name, resource, operation, risk_level,
+                  intent_data
            FROM harness.approvals
            WHERE id = :p0""",
         body.approval_id,
@@ -376,6 +409,15 @@ async def interrupt_resume(
             detail="approval does not belong to this agent",
         )
 
+    if approval_row["requested_by"] != principal.user_id and principal.role not in (
+        "admin",
+        "super_admin",
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="only the requester or an administrator may resume this approval",
+        )
+
     real_status = str(approval_row["status"])
 
     if real_status == "pending":
@@ -399,37 +441,54 @@ async def interrupt_resume(
             detail=f"approval status is '{real_status}', cannot resume",
         )
 
-    # C02/GAP-05: Mark approval as consumed (one-time use) to prevent
-    # replay attacks. The status changes from 'approved' to 'consumed'.
-    await db.execute(
-        """UPDATE harness.approvals
-           SET status = 'consumed'
-           WHERE id = :p0 AND status = 'approved'""",
-        body.approval_id,
-    )
-
+    # The pipeline reserves this ticket as ``executing`` and consumes it only
+    # after the connector outcome has a durable audit record.
     ctx = TenantContext(
         tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
+        user_id=approval_row["requested_by"],
         agent_id=body.agent_id,
         agent_scope="personal",
         session_id=session_id,
     )
     # Pass the verified approval status to the runner
     approval: dict[str, Any] = {
-        "id": str(body.approval_id),
+        "id": str(approval_row["id"]),
+        "tenant_id": str(approval_row["tenant_id"]),
+        "agent_id": str(approval_row["agent_id"]),
+        "skill_id": (str(approval_row["skill_id"]) if approval_row.get("skill_id") else None),
+        "session_id": str(approval_row["session_id"]),
+        "requested_by": str(approval_row["requested_by"]),
+        "tool_name": approval_row.get("tool_name"),
+        "resource": approval_row.get("resource"),
+        "operation": approval_row.get("operation"),
+        "risk_level": approval_row.get("risk_level"),
+        "intent_data": approval_row.get("intent_data"),
         "status": "approved",  # always "approved" here — we verified above
         "reason": body.reason,
     }
 
     async def event_stream() -> AsyncIterator[str]:
         final_content: str | None = None
+        span_cm = asynccontextmanager(tracer.span)
         try:
-            stream = runner.interrupt_and_resume(ctx, approval)
-            async for event in stream:
-                if event.type == "final" and event.content:
-                    final_content = event.content
-                yield f"data: {_serialize_event(event)}\n\n"
+            async with (
+                span_cm(
+                    "agent.resume",
+                    Granularity.TASK,
+                    ctx,
+                    approval_id=str(body.approval_id),
+                    session_id=str(session_id),
+                ) as span_handle,
+                _capture_llm_usage(request) as usage_records,
+            ):
+                try:
+                    stream = runner.interrupt_and_resume(ctx, approval)
+                    async for event in stream:
+                        if event.type == "final" and event.content:
+                            final_content = event.content
+                        yield f"data: {_serialize_event(event)}\n\n"
+                finally:
+                    _attach_llm_usage(span_handle, usage_records)
         except PermissionDeniedError as exc:
             yield f"data: {_error_event(exc)}\n\n"
         if final_content:

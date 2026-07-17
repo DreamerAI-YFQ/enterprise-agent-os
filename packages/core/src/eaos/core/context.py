@@ -30,6 +30,7 @@ class TenantContext:
     session_id: UUID | None = None
     department_ids: list[UUID] = field(default_factory=list)
     mode: str | None = None  # eval hint: "rag" forces knowledge-base retrieval
+    _fallback_session_id: UUID = field(default_factory=uuid4, compare=False, repr=False)
 
     def for_agent(
         self,
@@ -51,15 +52,9 @@ class TenantContext:
 
     @property
     def thread_id(self) -> str:
-        """LangGraph thread_id composite ID: tenant:agent:session.
-
-        Department shared agents use a fixed 'shared' session suffix so all
-        members access the same checkpoint (relay collaboration).
-        """
-        if self.agent_scope == "department":
-            return f"{self.tenant_id}:{self.agent_id}:shared"
-        session = self.session_id or uuid4()
-        return f"{self.tenant_id}:{self.agent_id}:{session}"
+        """Return the deterministic, session-isolated LangGraph thread id."""
+        suffix = str(self.session_id or self._fallback_session_id)
+        return f"tenant:{self.tenant_id}:agent:{self.agent_id}:session:{suffix}"
 
 
 def get_tenant_context() -> TenantContext | None:

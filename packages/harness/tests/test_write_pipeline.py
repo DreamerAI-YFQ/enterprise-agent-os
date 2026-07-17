@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
-from eaos.data.connector import WriteResult
+from eaos.data.connector import DataResult, WriteResult
 from eaos.harness.write_pipeline import (
     WriteApprovalRequired,
     WriteIntent,
@@ -49,6 +49,8 @@ def _mock_connector(result: WriteResult) -> Any:
     connector: Any = MagicMock()
     connector.write = AsyncMock(return_value=result)
     connector.rollback = AsyncMock(return_value=None)
+    rows = [result.before] if result.before is not None else []
+    connector.read = AsyncMock(return_value=DataResult(rows=rows, total=len(rows)))
     return connector
 
 
@@ -62,8 +64,8 @@ def _mock_audit_logger() -> Any:
 def _mock_approval_gate() -> Any:
     ag: Any = MagicMock()
     ag.request_approval = AsyncMock(return_value=uuid4())
-    # C13/Fix-3: WritePipeline now verifies approval status via check_approval
-    ag.check_approval = AsyncMock(return_value="approved")
+    ag.claim_for_execution = AsyncMock(return_value="executing")
+    ag.consume_after_execution = AsyncMock(return_value=None)
     return ag
 
 
@@ -73,13 +75,14 @@ def _make_pipeline(
     connector: Any | None = None,
     audit_logger: Any | None = None,
     approval_gate: Any | None = None,
+    db: Any = None,
 ) -> tuple[WritePipeline, dict[str, Any]]:
     h = harness or _mock_harness()
     conn = connector or _mock_connector(WriteResult(success=True, after={"id": "1"}))
     al = audit_logger or _mock_audit_logger()
     ag = approval_gate or _mock_approval_gate()
     resolver: Any = MagicMock(return_value=conn)
-    pipeline = WritePipeline(h, resolver, al, ag)
+    pipeline = WritePipeline(h, resolver, al, ag, db=db)
     return pipeline, {
         "harness": h,
         "connector": conn,
@@ -171,6 +174,8 @@ class TestHITL:
         assert outcome.approval_id == approval_id
         # Should NOT request a new approval
         mocks["approval"].request_approval.assert_not_called()
+        mocks["approval"].claim_for_execution.assert_awaited_once()
+        mocks["approval"].consume_after_execution.assert_awaited_once()
 
     async def test_medium_risk_no_approval_needed(self) -> None:
         pipe, mocks = _make_pipeline()
@@ -228,6 +233,19 @@ class TestWriteFailure:
         assert outcome.rolled_back is False
         assert outcome.rollback_error == "rollback also failed"
 
+    async def test_rollback_verification_read_error_fails_closed(self) -> None:
+        before = {"name": "Old", "id": "123"}
+        result = WriteResult(success=False, before=before, error="write failed")
+        connector = _mock_connector(result)
+        connector.read = AsyncMock(side_effect=RuntimeError("read unavailable"))
+        pipe, _ = _make_pipeline(connector=connector)
+
+        outcome = await pipe.execute(_intent(operation="update", record_id="123"))
+
+        assert outcome.rolled_back is False
+        assert outcome.rollback_error is not None
+        assert "verification failed" in outcome.rollback_error
+
 
 class TestAuditFields:
     async def test_audit_includes_trace_id(self) -> None:
@@ -243,6 +261,14 @@ class TestAuditFields:
         await pipe.execute(_intent(risk_level="high", approval_id=approval_id))
         entry = mocks["audit"].log.call_args.args[0]
         assert entry.approval_id == approval_id
+
+    async def test_audit_includes_session_and_idempotency_key(self) -> None:
+        pipe, mocks = _make_pipeline()
+        session_id = uuid4()
+        await pipe.execute(_intent(session_id=session_id, idempotency_key="idem-audit"))
+        entry = mocks["audit"].log.call_args.args[0]
+        assert entry.session_id == session_id
+        assert entry.idempotency_key == "idem-audit"
 
     async def test_audit_includes_skill_id(self) -> None:
         pipe, mocks = _make_pipeline()
@@ -280,3 +306,101 @@ class TestGuardContext:
         await pipe.execute(_intent(session_id=session_id))
         ctx = mocks["harness"].guard.call_args.args[0]
         assert ctx.attributes.get("session_id") == session_id
+
+    async def test_high_risk_submission_uses_submit_permission(self) -> None:
+        pipe, mocks = _make_pipeline()
+        with pytest.raises(WriteApprovalRequired):
+            await pipe.execute(_intent(risk_level="high", session_id=uuid4()))
+        ctx = mocks["harness"].guard.call_args.args[0]
+        assert ctx.action == "submit_write"
+
+    async def test_approved_high_risk_uses_delegated_execution_permission(self) -> None:
+        pipe, mocks = _make_pipeline()
+        approval_id = uuid4()
+        await pipe.execute(
+            _intent(
+                risk_level="high",
+                session_id=uuid4(),
+                approval_id=approval_id,
+            )
+        )
+        ctx = mocks["harness"].guard.call_args.args[0]
+        assert ctx.action == "execute_approved_write"
+        assert ctx.attributes["approval_id"] == approval_id
+
+
+class TestPersistedIdempotencyAndCompensation:
+    async def test_restart_idempotency_uses_after_state_column(self) -> None:
+        audit_id = uuid4()
+        approval_id = uuid4()
+        db = AsyncMock()
+        db.fetch_one.return_value = {
+            "id": audit_id,
+            "success": True,
+            "before_state": None,
+            "after_state": {"id": "order-1"},
+            "approval_id": approval_id,
+        }
+        pipe, mocks = _make_pipeline(db=db)
+
+        outcome = await pipe.execute(_intent(idempotency_key="idem-restart"))
+
+        assert outcome.success is True
+        assert outcome.after == {"id": "order-1"}
+        assert outcome.audit_id == audit_id
+        assert outcome.approval_id == approval_id
+        mocks["connector"].write.assert_not_awaited()
+        assert "after_state" in db.fetch_one.call_args.args[0]
+        assert "after_data" not in db.fetch_one.call_args.args[0]
+
+    async def test_manual_create_compensation_is_verified_and_audited(self) -> None:
+        audit_id = uuid4()
+        approval_id = uuid4()
+        db = AsyncMock()
+        db.fetch_one.return_value = {
+            "id": audit_id,
+            "tenant_id": TID,
+            "tool_name": "erp_create_sales_order",
+            "resource": "orders",
+            "operation": "create",
+            "before_state": None,
+            "after_state": {"id": "order-1", "status": "pending"},
+            "approval_id": approval_id,
+            "success": True,
+            "rolled_back": False,
+        }
+        pipe, mocks = _make_pipeline(db=db)
+
+        outcome = await pipe.rollback_audit(audit_id, TID, "competition demo")
+
+        assert outcome.success is True
+        assert outcome.rolled_back is True
+        mocks["connector"].rollback.assert_awaited_once()
+        snapshot = mocks["connector"].rollback.call_args.args[1]
+        assert snapshot["record_id"] == "order-1"
+        mocks["audit"].log_rollback.assert_awaited_once_with(audit_id, "competition demo")
+
+    async def test_manual_compensation_read_error_is_not_reported_success(self) -> None:
+        audit_id = uuid4()
+        db = AsyncMock()
+        db.fetch_one.return_value = {
+            "id": audit_id,
+            "tenant_id": TID,
+            "tool_name": "erp_create_sales_order",
+            "resource": "orders",
+            "operation": "create",
+            "before_state": None,
+            "after_state": {"id": "order-1"},
+            "approval_id": uuid4(),
+            "success": True,
+            "rolled_back": False,
+            "idempotency_key": "idem-1",
+        }
+        connector = _mock_connector(WriteResult(success=True))
+        connector.read = AsyncMock(side_effect=RuntimeError("read unavailable"))
+        pipe, mocks = _make_pipeline(db=db, connector=connector)
+
+        with pytest.raises(RuntimeError, match="verification failed"):
+            await pipe.rollback_audit(audit_id, TID)
+
+        mocks["audit"].log_rollback.assert_not_awaited()

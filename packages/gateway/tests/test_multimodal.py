@@ -9,11 +9,8 @@ Covers:
 from __future__ import annotations
 
 import base64
-import tempfile
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from eaos.core.auth import create_jwt_token
 from eaos.core.config import AppConfig
@@ -295,9 +292,7 @@ class TestMessageToDictMultimodal:
 class TestUploadRoute:
     async def test_upload_image(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("test.png", b"\x89PNG\r\n\x1a\n", "image/png")},
@@ -317,9 +312,7 @@ class TestUploadRoute:
 
     async def test_upload_text_file(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("note.txt", b"hello world", "text/plain")},
@@ -332,9 +325,7 @@ class TestUploadRoute:
 
     async def test_upload_unsupported_type_rejected(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("malware.exe", b"MZ\x90\x00", "application/octet-stream")},
@@ -347,9 +338,7 @@ class TestUploadRoute:
         # Override max size to 1 byte for this test.
         app.state.config.uploads.max_size_mb = 0
         # max_size_mb=0 -> 0 bytes allowed, so even 1 byte is over.
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("big.txt", b"x" * 100, "text/plain")},
@@ -359,9 +348,7 @@ class TestUploadRoute:
 
     async def test_upload_no_auth_returns_401(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("test.png", b"\x89PNG", "image/png")},
@@ -370,9 +357,7 @@ class TestUploadRoute:
 
     async def test_upload_admin_also_works(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/upload",
                 files={"file": ("doc.md", b"# Title", "text/markdown")},
@@ -390,9 +375,7 @@ class TestUploadRoute:
 class TestUploadsStaticFiles:
     async def test_uploaded_file_accessible_via_url(self, tmp_path: Path) -> None:
         app = create_app(_config(uploads_dir=str(tmp_path)))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             upload_resp = await client.post(
                 "/upload",
                 files={"file": ("test.txt", b"hello world", "text/plain")},

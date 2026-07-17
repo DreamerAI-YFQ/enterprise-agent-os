@@ -1,0 +1,134 @@
+ledger_version: "1.0.0"
+core_dataset_path: "benchmarks/competition/datasets/rag_queries_core_v1.yaml"
+source_dataset_path: "benchmarks/competition/datasets/rag_queries_v1.yaml"
+source_dataset_sha256: "148d2bbee4c8bd8dfc611a5149d34411d49af0a7f1184419272c0c745dd1b264"
+gold_source_path: "scripts/competition/seed_knowledge_base.py"
+gold_source_sha256: "dfd7b47f6e5f8a2695160a53da499a51e2b836aa5664a49fc60a829a957fbdb8"
+
+selection:
+  algorithm: "sha256(seed + literal-backslash-n + category + literal-backslash-n + case_id), ascending within category"
+  seed: "eaos-rag-core-v1-selection-20260717"
+  seed_sha256: "affa8039fd049ae2aa698c98a78c978217c3b2f49b5e40a0df35da73f405e3d5"
+  cases_per_category: 6
+  category_count: 8
+  selected_case_count: 48
+  excluded_case_count: 102
+  selected_order_sha256: "1cb45b627fb870b8f93111817b71a5b5aaefd7940af47d611ac8de1c9bc7af27"
+  exclusion_reason: "deterministic category rank greater than 6"
+  result_independence: "No retrieval result, model answer, latency, or historical score was an input."
+
+selected_by_category:
+  产品查询: ["RAG-015", "RAG-003", "RAG-007", "RAG-017", "RAG-004", "RAG-010"]
+  客户查询: ["RAG-036", "RAG-026", "RAG-021", "RAG-031", "RAG-033", "RAG-037"]
+  订单查询: ["RAG-055", "RAG-054", "RAG-051", "RAG-046", "RAG-056", "RAG-044"]
+  库存查询: ["RAG-074", "RAG-072", "RAG-073", "RAG-062", "RAG-063", "RAG-069"]
+  跨表关联查询: ["RAG-086", "RAG-090", "RAG-087", "RAG-085", "RAG-084", "RAG-080"]
+  知识库查询: ["RAG-117", "RAG-105", "RAG-114", "RAG-106", "RAG-115", "RAG-100"]
+  无答案查询: ["RAG-122", "RAG-124", "RAG-133", "RAG-125", "RAG-129", "RAG-131"]
+  权限隔离查询: ["RAG-147", "RAG-148", "RAG-149", "RAG-137", "RAG-144", "RAG-136"]
+
+excluded_by_category:
+  产品查询: ["RAG-001", "RAG-002", "RAG-005", "RAG-006", "RAG-008", "RAG-009", "RAG-011", "RAG-012", "RAG-013", "RAG-014", "RAG-016", "RAG-018", "RAG-019", "RAG-020"]
+  客户查询: ["RAG-022", "RAG-023", "RAG-024", "RAG-025", "RAG-027", "RAG-028", "RAG-029", "RAG-030", "RAG-032", "RAG-034", "RAG-035", "RAG-038", "RAG-039", "RAG-040"]
+  订单查询: ["RAG-041", "RAG-042", "RAG-043", "RAG-045", "RAG-047", "RAG-048", "RAG-049", "RAG-050", "RAG-052", "RAG-053", "RAG-057", "RAG-058", "RAG-059", "RAG-060"]
+  库存查询: ["RAG-061", "RAG-064", "RAG-065", "RAG-066", "RAG-067", "RAG-068", "RAG-070", "RAG-071", "RAG-075"]
+  跨表关联查询: ["RAG-076", "RAG-077", "RAG-078", "RAG-079", "RAG-081", "RAG-082", "RAG-083", "RAG-088", "RAG-089"]
+  知识库查询: ["RAG-091", "RAG-092", "RAG-093", "RAG-094", "RAG-095", "RAG-096", "RAG-097", "RAG-098", "RAG-099", "RAG-101", "RAG-102", "RAG-103", "RAG-104", "RAG-107", "RAG-108", "RAG-109", "RAG-110", "RAG-111", "RAG-112", "RAG-113", "RAG-116", "RAG-118", "RAG-119", "RAG-120"]
+  无答案查询: ["RAG-121", "RAG-123", "RAG-126", "RAG-127", "RAG-128", "RAG-130", "RAG-132", "RAG-134", "RAG-135"]
+  权限隔离查询: ["RAG-138", "RAG-139", "RAG-140", "RAG-141", "RAG-142", "RAG-143", "RAG-145", "RAG-146", "RAG-150"]
+
+gold_adjudication:
+  status: "approved"
+  as_of_date: "2024-03-12"
+  timezone: "Asia/Shanghai"
+  week_definition: "ISO-8601 Monday through Sunday, inclusive"
+  corrected_case_count: 7
+  retained_case_count: 41
+
+  corrected_cases:
+    - case_id: "RAG-015"
+      old_gold: ["KB-PRD-002", "KB-PRD-004", "KB-PRD-009", "KB-PRD-010"]
+      new_gold: ["KB-PRD-002", "KB-PRD-004", "KB-PRD-005", "KB-PRD-008", "KB-PRD-009", "KB-PRD-010"]
+      reason: "PRD-005 is 39999 yuan and PRD-008 is 8999 yuan; both exceed 5000."
+
+    - case_id: "RAG-055"
+      old_gold: ["KB-ORD-001", "KB-ORD-005", "KB-ORD-009"]
+      new_gold: ["KB-ORD-001", "KB-ORD-003", "KB-ORD-005", "KB-ORD-009"]
+      reason: "ORD-003 explicitly declares 二级审批."
+
+    - case_id: "RAG-051"
+      old_gold: ["KB-ORD-006", "KB-ORD-007", "KB-ORD-008", "KB-ORD-009", "KB-ORD-010"]
+      new_gold: ["KB-ORD-009", "KB-ORD-010"]
+      reason: "At 2024-03-12, the ISO week is 2024-03-11..17; only ORD-009 and ORD-010 were created in that interval."
+
+    - case_id: "RAG-090"
+      old_gold: ["KB-CUS-001", "KB-CUS-002", "KB-CUS-003", "KB-CUS-004", "KB-CUS-005", "KB-ORD-001", "KB-ORD-002", "KB-ORD-003", "KB-ORD-004", "KB-ORD-005"]
+      new_gold: ["KB-CUS-001", "KB-CUS-002", "KB-CUS-003", "KB-CUS-004", "KB-CUS-005", "KB-ORD-001", "KB-ORD-002", "KB-ORD-003", "KB-ORD-004", "KB-ORD-005", "KB-ORD-006", "KB-ORD-007", "KB-ORD-008", "KB-ORD-009", "KB-ORD-010"]
+      reason: "Per-customer purchase frequency requires the complete ten-order evidence set."
+
+    - case_id: "RAG-087"
+      old_gold: ["KB-ORD-004", "KB-PRD-002", "KB-PRD-004"]
+      new_gold: ["KB-ORD-004", "KB-ORD-005", "KB-PRD-002", "KB-PRD-004"]
+      reason: "ORD-005 also contains both PRD-002 and PRD-004."
+
+    - case_id: "RAG-085"
+      old_gold: ["KB-PRD-001", "KB-ORD-001", "KB-ORD-004"]
+      new_gold: ["KB-PRD-001", "KB-ORD-001", "KB-ORD-004", "KB-ORD-006"]
+      reason: "ORD-006 also purchases PRD-001 and is the latest of the three."
+
+    - case_id: "RAG-080"
+      old_gold: ["KB-PRD-004", "KB-ORD-004", "KB-ORD-007", "KB-CUS-001", "KB-CUS-004"]
+      new_gold: ["KB-PRD-004", "KB-ORD-004", "KB-ORD-005", "KB-ORD-007", "KB-CUS-001", "KB-CUS-004", "KB-CUS-005"]
+      reason: "ORD-005 shows CUS-005 also purchased PRD-004."
+
+  retained_case_ids:
+    - "RAG-003"
+    - "RAG-007"
+    - "RAG-017"
+    - "RAG-004"
+    - "RAG-010"
+    - "RAG-036"
+    - "RAG-026"
+    - "RAG-021"
+    - "RAG-031"
+    - "RAG-033"
+    - "RAG-037"
+    - "RAG-054"
+    - "RAG-046"
+    - "RAG-056"
+    - "RAG-044"
+    - "RAG-074"
+    - "RAG-072"
+    - "RAG-073"
+    - "RAG-062"
+    - "RAG-063"
+    - "RAG-069"
+    - "RAG-086"
+    - "RAG-084"
+    - "RAG-117"
+    - "RAG-105"
+    - "RAG-114"
+    - "RAG-106"
+    - "RAG-115"
+    - "RAG-100"
+    - "RAG-122"
+    - "RAG-124"
+    - "RAG-133"
+    - "RAG-125"
+    - "RAG-129"
+    - "RAG-131"
+    - "RAG-147"
+    - "RAG-148"
+    - "RAG-149"
+    - "RAG-137"
+    - "RAG-144"
+    - "RAG-136"
+
+permission_evidence_policy:
+  negative_gold_is_not_permission_proof: true
+  formal_profile_requires_run_scoped_canaries: true
+  canary_kinds: ["cross_tenant", "foreign_department", "foreign_personal"]
+  canary_content_contains_all_selected_permission_queries: true
+  canary_embedding_required: true
+  zero_canary_return_required: true
+  exact_cleanup_receipt_required: true

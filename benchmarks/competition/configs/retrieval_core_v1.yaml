@@ -1,0 +1,42 @@
+profile_id: "core-v1"
+profile_version: "1.0.0"
+purpose: "48-case preregistered retrieval core set; 8 categories x 6 cases"
+
+dataset_path: "benchmarks/competition/datasets/rag_queries_core_v1.yaml"
+correction_ledger_path: "benchmarks/competition/datasets/rag_queries_core_v1_ledger.yaml"
+
+selection:
+  source_dataset_path: "benchmarks/competition/datasets/rag_queries_v1.yaml"
+  source_dataset_sha256: "148d2bbee4c8bd8dfc611a5149d34411d49af0a7f1184419272c0c745dd1b264"
+  algorithm: "sha256(seed + literal-backslash-n + category + literal-backslash-n + case_id), ascending within category"
+  seed: "eaos-rag-core-v1-selection-20260717"
+  seed_sha256: "affa8039fd049ae2aa698c98a78c978217c3b2f49b5e40a0df35da73f405e3d5"
+  group_field: "category"
+  cases_per_group: 6
+  group_count: 8
+  selected_case_count: 48
+  selected_order_sha256: "1cb45b627fb870b8f93111817b71a5b5aaefd7940af47d611ac8de1c9bc7af27"
+  result_independent: true
+
+evaluation:
+  top_k: 5
+  formal_hard_gates_required_for_claims: true
+  relevance_metrics_scope: "positive-gold cases only"
+  empty_cases_scope: "zero-retrieval diagnostic only"
+  refusal_and_citation_scope: "requires separate answer-generation evaluation"
+
+permission_fixture:
+  required_for_formal: true
+  case_category: "权限隔离查询"
+  minimum_cases: 6
+  canary_kinds: ["cross_tenant", "foreign_department", "foreign_personal"]
+  exact_query_text_in_each_canary: true
+  real_embedding_required: true
+  zero_return_required: true
+  exact_cleanup_required: true
+
+boundaries:
+  - "Selection used no retrieval result, latency, model output, or prior metric."
+  - "The full 60-label competition corpus remains present; unselected cases are not deleted from the corpus."
+  - "Permission claims remain unavailable until forbidden-scope and Globex canaries are frozen."
+  - "Stored-vector embedding model identity must be bound separately before full reproducibility is claimed."

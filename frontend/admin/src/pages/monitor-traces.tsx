@@ -113,7 +113,7 @@ export default function MonitorTracesPage() {
     enabled: submitted.length > 0,
   });
 
-  const spans = traceQuery.data ?? [];
+  const spans = useMemo(() => traceQuery.data ?? [], [traceQuery.data]);
   const tree = useMemo(() => buildTree(spans), [spans]);
 
   const totalDuration = useMemo(() => {

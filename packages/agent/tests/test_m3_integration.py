@@ -151,10 +151,12 @@ def _mock_knowledge_engine() -> Any:
     return engine
 
 
-def _mock_mcp_server(result: str = '{"count": 42}') -> Any:
+def _mock_mcp_server(result: dict[str, Any] | None = None) -> Any:
     """Mock EnterpriseMCPServer returning a canned tool result."""
     server: Any = MagicMock()
-    server.call_tool = AsyncMock(return_value=result)
+    server.call_tool = AsyncMock(
+        return_value=result if result is not None else {"count": 42}
+    )
     server.list_tools = AsyncMock(return_value=[])
     return server
 
@@ -269,7 +271,10 @@ class TestSingleAgentRAG:
 class TestSingleAgentText2SQL:
     async def test_text2sql_via_mcp(self, db: DbClient) -> None:
         mcp = _mock_mcp_server(
-            result='{"rows": [{"count": 10}], "sql": "SELECT count(*) FROM erp.customers"}'
+            result={
+                "rows": [{"count": 10}],
+                "sql": "SELECT count(*) FROM erp.customers",
+            }
         )
         llm = _mock_llm_router([
             '{"steps": [{"id": 0, "action": "mcp", '
@@ -293,6 +298,7 @@ class TestSingleAgentSkill:
             '{"steps": [{"id": 0, "action": "skill", "args": {"skill_name": "text2sql"}}]}',
             "Skill executed: SELECT 1",
             '{"done": true, "reason": "skill completed"}',
+            "Skill execution completed successfully.",
         ])
         runner = _make_runner(db, llm)
         ctx = _ctx()

@@ -11,6 +11,7 @@ activates when an integration test requests it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import sys
@@ -19,6 +20,12 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# psycopg's async connection does not support the default Proactor loop on
+# Windows.  Select the compatible loop policy before pytest-asyncio creates
+# its session-scoped event loop; other platforms keep their native default.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -37,7 +44,7 @@ if TYPE_CHECKING:
 MOCK_SAAS_BASE_URL = "http://localhost:18000"
 MOCK_SAAS_API_KEY = "eaos-api-key-001"
 # Matches EAOS_APP__SECRET_KEY in .env so CredentialCrypto derives the same key.
-EAOS_SECRET_KEY = "dev-secret-change-in-prod"
+EAOS_SECRET_KEY = "dev-secret-change-in-prod-use-at-least-32-bytes"
 
 
 def pytest_collection_modifyitems(

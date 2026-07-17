@@ -10,6 +10,7 @@ approval, it raises ``WriteApprovalRequired``. The caller resumes by re-calling
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,65 @@ class WriteIntent:
     department_ids: list[UUID] = field(default_factory=list)
     idempotency_key: str | None = None  # C09: dedup key for retry safety
 
+    def to_approval_payload(self) -> dict[str, Any]:
+        """Serialize the complete immutable intent needed after a restart."""
+        return {
+            "version": 1,
+            "data": dict(self.data),
+            "record_id": self.record_id,
+            "agent_scope": self.agent_scope,
+            "department_ids": [str(item) for item in self.department_ids],
+            "trace_id": str(self.trace_id) if self.trace_id else None,
+            "idempotency_key": self.idempotency_key,
+        }
+
+    @classmethod
+    def from_approval_record(cls, approval: dict[str, Any]) -> WriteIntent:
+        """Rebuild the server-owned write intent stored with an approval."""
+        import json
+        from uuid import UUID
+
+        payload = approval.get("intent_data") or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            raise ValueError("approval intent_data must be an object")
+
+        # Backward compatibility for rows that stored only the tool arguments.
+        data = payload.get("data", payload)
+        if not isinstance(data, dict):
+            raise ValueError("approval intent data must be an object")
+
+        def _uuid(value: Any, field_name: str) -> UUID:
+            if value is None:
+                raise ValueError(f"approval is missing {field_name}")
+            return value if isinstance(value, UUID) else UUID(str(value))
+
+        trace_raw = payload.get("trace_id")
+        departments = payload.get("department_ids") or []
+        return cls(
+            tenant_id=_uuid(approval.get("tenant_id"), "tenant_id"),
+            principal_id=_uuid(approval.get("requested_by"), "requested_by"),
+            agent_id=_uuid(approval.get("agent_id"), "agent_id"),
+            tool_name=str(approval.get("tool_name") or ""),
+            resource=str(approval.get("resource") or ""),
+            operation=str(approval.get("operation") or ""),
+            data=dict(data),
+            record_id=payload.get("record_id"),
+            agent_scope=str(payload.get("agent_scope") or "personal"),
+            skill_id=(
+                _uuid(approval.get("skill_id"), "skill_id") if approval.get("skill_id") else None
+            ),
+            trace_id=_uuid(trace_raw, "trace_id") if trace_raw else None,
+            approval_id=_uuid(approval.get("id"), "id"),
+            session_id=_uuid(approval.get("session_id"), "session_id"),
+            risk_level=str(approval.get("risk_level") or "high"),
+            department_ids=[_uuid(item, "department_id") for item in departments],
+            idempotency_key=(
+                str(payload["idempotency_key"]) if payload.get("idempotency_key") else None
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class WriteOutcome:
@@ -73,8 +133,7 @@ class WriteApprovalRequired(Exception):  # noqa: N818 - domain name, used across
         self.approval_id = approval_id
         self.intent = intent
         super().__init__(
-            f"approval {approval_id} required for {intent.operation} "
-            f"on {intent.resource}"
+            f"approval {approval_id} required for {intent.operation} on {intent.resource}"
         )
 
 
@@ -108,9 +167,8 @@ class WritePipeline:
     async def _check_idempotency(self, intent: WriteIntent) -> WriteOutcome | None:
         """C09: Check if this write was already executed successfully.
 
-        In-process cache prevents duplicate writes from API retries within
-        the same worker. For cross-restart idempotency, the audit table
-        can be queried via self._db (future enhancement).
+        In-process cache prevents duplicate writes within a worker. The
+        persisted idempotency column provides the same guarantee after restart.
         """
         cached = self._idempotency_cache.get(intent.idempotency_key or "")
         if cached is not None and cached.success:
@@ -119,10 +177,12 @@ class WritePipeline:
         if self._db is not None and intent.idempotency_key:
             try:
                 row = await self._db.fetch_one(
-                    "SELECT id, success, after_data FROM harness.write_audit "
+                    "SELECT id, success, before_state, after_state, approval_id "
+                    "FROM harness.write_audit "
                     "WHERE tenant_id = :p0 AND tool_name = :p1 "
-                    "AND after_data->>'_idempotency_key' = :p2 "
-                    "AND success = TRUE LIMIT 1",
+                    "AND idempotency_key = :p2 "
+                    "AND success = TRUE AND rolled_back = FALSE "
+                    "ORDER BY created_at DESC LIMIT 1",
                     intent.tenant_id,
                     intent.tool_name,
                     intent.idempotency_key,
@@ -130,8 +190,10 @@ class WritePipeline:
                 if row is not None:
                     return WriteOutcome(
                         success=True,
-                        after=row.get("after_data"),
+                        before=self._as_dict(row.get("before_state")),
+                        after=self._as_dict(row.get("after_state")),
                         audit_id=row.get("id"),
+                        approval_id=row.get("approval_id"),
                     )
             except Exception:  # noqa: BLE001 — idempotency check is best-effort
                 pass
@@ -153,13 +215,20 @@ class WritePipeline:
         """
         # C09: Idempotency check — if we've seen this key before and the
         # write succeeded, return the cached outcome instead of re-executing.
-        if intent.idempotency_key and self._db is not None:
+        if intent.idempotency_key:
             cached = await self._check_idempotency(intent)
             if cached is not None:
                 return cached
 
-        # 1. Build context and run pre-action guard
-        ctx = self._build_ctx(intent)
+        # Submission and execution are distinct permissions for high-risk
+        # writes. Employees may submit an order for review, but execution is
+        # only reachable with a server-verified approval id.
+        guard_action = "write_data"
+        if intent.risk_level == "high":
+            guard_action = (
+                "execute_approved_write" if intent.approval_id is not None else "submit_write"
+            )
+        ctx = self._build_ctx(intent, action=guard_action)
         await self._harness.guard(ctx)
 
         # 2. HITL: high-risk writes require approval
@@ -167,21 +236,31 @@ class WritePipeline:
             if intent.approval_id is None:
                 # Request new approval
                 approval_id = await self._approval_gate.request_approval(
-                    ctx, intent.skill_id, "high_risk_write",
+                    ctx,
+                    intent.skill_id,
+                    "high_risk_write",
                     tool_name=intent.tool_name,
                     resource=intent.resource,
                     operation=intent.operation,
                     risk_level=intent.risk_level,
-                    intent_data=intent.data,
+                    intent_data=intent.to_approval_payload(),
                 )
                 raise WriteApprovalRequired(approval_id, intent)
             else:
                 # C08/GAP-05: Verify the real approval status from DB.
                 # Don't trust that approval_id is non-null — verify it's 'approved'.
-                real_status = await self._approval_gate.check_approval(
-                    intent.approval_id, intent.tenant_id
+                real_status = await self._approval_gate.claim_for_execution(
+                    intent.approval_id,
+                    tenant_id=intent.tenant_id,
+                    agent_id=intent.agent_id,
+                    session_id=intent.session_id,
+                    requested_by=intent.principal_id,
+                    tool_name=intent.tool_name,
+                    resource=intent.resource,
+                    operation=intent.operation,
+                    idempotency_key=intent.idempotency_key,
                 )
-                if real_status != "approved":
+                if real_status != "executing":
                     return WriteOutcome(
                         success=False,
                         error=f"approval status is '{real_status}', expected 'approved'",
@@ -200,9 +279,10 @@ class WritePipeline:
                 intent.tenant_id, intent.resource, operation
             )
         except Exception as exc:
-            return await self._handle_write_failure(
-                intent, exc, None, ctx
-            )
+            outcome = await self._handle_write_failure(intent, exc, None, ctx)
+            await self._consume_approval(intent)
+            await self._harness.post_guard(ctx, exc)
+            return outcome
 
         # 4. Audit log
         audit_id = await self._audit_logger.log(
@@ -217,15 +297,19 @@ class WritePipeline:
                 after=result.after,
                 approval_id=intent.approval_id,
                 trace_id=intent.trace_id,
+                session_id=intent.session_id,
+                idempotency_key=intent.idempotency_key,
                 error=result.error,
             )
         )
 
         # 5. Rollback on failure (if we have a before snapshot)
         if not result.success and result.before is not None:
-            return await self._rollback_and_log(
-                intent, result, audit_id
-            )
+            outcome = await self._rollback_and_log(intent, result, audit_id)
+            await self._consume_approval(intent)
+            return outcome
+
+        await self._consume_approval(intent)
 
         # 6. Post-guard (compliance/quality)
         await self._harness.post_guard(ctx, result)
@@ -261,13 +345,15 @@ class WritePipeline:
                 error=str(exc),
                 approval_id=intent.approval_id,
                 trace_id=intent.trace_id,
+                session_id=intent.session_id,
+                idempotency_key=intent.idempotency_key,
             )
         )
-        await self._harness.post_guard(ctx, exc)
         return WriteOutcome(
             success=False,
             error=str(exc),
             audit_id=audit_id,
+            approval_id=intent.approval_id,
         )
 
     async def _rollback_and_log(
@@ -308,21 +394,17 @@ class WritePipeline:
                     intent.tenant_id, intent.resource, snapshot["record_id"], result.before
                 )
                 if not check:
-                    rollback_error = "rollback verification failed: record does not match before snapshot"
+                    rollback_error = (
+                        "rollback verification failed: record does not match before snapshot"
+                    )
 
             if rollback_error is None:
-                await self._audit_logger.log_rollback(
-                    audit_id, f"write failed: {result.error}"
-                )
+                await self._audit_logger.log_rollback(audit_id, f"write failed: {result.error}")
         except Exception as exc:
             # C09: Don't swallow — record the rollback failure
             rollback_error = str(exc)
-            try:
-                await self._audit_logger.log_rollback(
-                    audit_id, f"rollback FAILED: {exc}"
-                )
-            except Exception:  # noqa: BLE001 — audit logging is best-effort
-                pass
+            with suppress(Exception):
+                await self._audit_logger.log_rollback(audit_id, f"rollback FAILED: {exc}")
 
         return WriteOutcome(
             success=False,
@@ -331,36 +413,127 @@ class WritePipeline:
             audit_id=audit_id,
             rolled_back=(rollback_error is None),  # C09: True only if rollback succeeded
             rollback_error=rollback_error,
+            approval_id=intent.approval_id,
         )
 
-    async def _verify_record_deleted(
-        self, tenant_id: UUID, resource: str, record_id: str
-    ) -> bool:
+    async def _consume_approval(self, intent: WriteIntent) -> None:
+        """Finalize a reserved approval only after execution is audited."""
+        if intent.risk_level == "high" and intent.approval_id is not None:
+            await self._approval_gate.consume_after_execution(intent.approval_id, intent.tenant_id)
+
+    async def rollback_audit(
+        self,
+        audit_id: UUID,
+        tenant_id: UUID,
+        reason: str = "manual compensating rollback",
+    ) -> WriteOutcome:
+        """Compensate a successful audited write and verify the restored state."""
+        if self._db is None:
+            raise RuntimeError("database is required for audited rollback")
+
+        from eaos.core.errors import NotFoundError
+
+        row = await self._db.fetch_one(
+            """SELECT id, tenant_id, tool_name, resource, operation,
+                      before_state, after_state, approval_id, success,
+                      rolled_back, idempotency_key
+               FROM harness.write_audit
+               WHERE id = :p0 AND tenant_id = :p1""",
+            audit_id,
+            tenant_id,
+        )
+        if row is None:
+            raise NotFoundError(f"write audit {audit_id} not found")
+
+        before = self._as_dict(row.get("before_state"))
+        after = self._as_dict(row.get("after_state"))
+        if not row.get("success"):
+            raise ValueError("cannot compensate an unsuccessful write")
+        if row.get("rolled_back"):
+            return WriteOutcome(
+                success=True,
+                before=before,
+                after=after,
+                audit_id=audit_id,
+                rolled_back=True,
+                approval_id=row.get("approval_id"),
+            )
+
+        operation = str(row["operation"])
+        record_id = (after or before or {}).get("id")
+        if record_id is None:
+            raise ValueError("audit snapshot has no record id for rollback")
+        snapshot = {
+            "operation": operation,
+            "resource": str(row["resource"]),
+            "record_id": str(record_id),
+            "before": before,
+        }
+
+        connector = self._connector_resolver(str(row["tool_name"]))
+        await connector.rollback(tenant_id, snapshot)
+
+        verified = True
+        if operation == "create":
+            verified = await self._verify_record_deleted(
+                tenant_id, str(row["resource"]), str(record_id)
+            )
+        elif operation in ("update", "delete") and before is not None:
+            verified = await self._verify_record_matches(
+                tenant_id, str(row["resource"]), str(record_id), before
+            )
+        if not verified:
+            raise RuntimeError("rollback verification failed")
+
+        await self._audit_logger.log_rollback(audit_id, reason)
+        idempotency_key = row.get("idempotency_key")
+        if idempotency_key:
+            self._idempotency_cache.pop(str(idempotency_key), None)
+        return WriteOutcome(
+            success=True,
+            before=before,
+            after=after,
+            audit_id=audit_id,
+            rolled_back=True,
+            approval_id=row.get("approval_id"),
+        )
+
+    @staticmethod
+    def _as_dict(value: Any) -> dict[str, Any] | None:
+        """Normalize JSONB values returned as either mappings or JSON text."""
+        if value is None or isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            import json
+
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        return dict(value)
+
+    async def _verify_record_deleted(self, tenant_id: UUID, resource: str, record_id: str) -> bool:
         """Verify that a record was actually deleted (for create rollback)."""
         try:
-            connector = self._connector_resolver("erp_read")  # type: ignore[arg-type]
+            connector = self._connector_resolver("erp_read")
         except Exception:
-            return True  # can't verify — assume success
+            return False
         # Use the connector's read method to check
         from eaos.data.connector import ReadQuery
+
         try:
-            result = await connector.read(  # type: ignore[attr-defined]
-                tenant_id, resource, ReadQuery(filters={"id": record_id})
-            )
+            result = await connector.read(tenant_id, resource, ReadQuery(filters={"id": record_id}))
             return result.total == 0
         except Exception:
-            return True  # can't verify — assume success
+            return False
 
     async def _verify_record_matches(
         self, tenant_id: UUID, resource: str, record_id: str, before: dict[str, Any]
     ) -> bool:
         """Verify that a record matches the before snapshot (for update rollback)."""
-        connector = self._connector_resolver("erp_read")  # type: ignore[arg-type]
         try:
+            connector = self._connector_resolver("erp_read")
             from eaos.data.connector import ReadQuery
-            result = await connector.read(  # type: ignore[attr-defined]
-                tenant_id, resource, ReadQuery(filters={"id": record_id})
-            )
+
+            result = await connector.read(tenant_id, resource, ReadQuery(filters={"id": record_id}))
             if result.total == 0 or not result.rows:
                 return False
             current = result.rows[0]
@@ -372,10 +545,14 @@ class WritePipeline:
                     return False
             return True
         except Exception:
-            return True  # can't verify — assume success
+            return False
 
     @staticmethod
-    def _build_ctx(intent: WriteIntent) -> GuardContext:
+    def _build_ctx(
+        intent: WriteIntent,
+        *,
+        action: str = "write_data",
+    ) -> GuardContext:
         """Build a GuardContext from a WriteIntent."""
         from eaos.harness.context import GuardContext
 
@@ -384,13 +561,15 @@ class WritePipeline:
             attrs["session_id"] = intent.session_id
         if intent.skill_id is not None:
             attrs["skill_id"] = intent.skill_id
+        if intent.approval_id is not None:
+            attrs["approval_id"] = intent.approval_id
         return GuardContext(
             tenant_id=intent.tenant_id,
             user_id=intent.principal_id,
             agent_id=intent.agent_id,
             agent_scope=intent.agent_scope,
             department_ids=list(intent.department_ids),
-            action="write_data",
+            action=action,
             resource=intent.resource,
             risk_level=intent.risk_level,
             attributes=attrs,

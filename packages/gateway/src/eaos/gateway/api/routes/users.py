@@ -13,11 +13,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID  # noqa: TC003
 
-from eaos.core.auth import Principal  # noqa: TC002
+from eaos.core.auth import Principal, hash_password  # noqa: TC002
 from eaos.gateway.api.deps import get_db
 from eaos.gateway.api.routes.admin import require_admin
 from fastapi import APIRouter, Depends, HTTPException, Query  # noqa: TC002
-from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from eaos.infra.db.base import DbClient
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/admin/users", tags=["users"])
 class UserCreate(BaseModel):
     email: str
     name: str
+    password: str = Field(min_length=8, max_length=1024)
     role: str = "employee"
     status: str = "active"
 
@@ -36,6 +38,7 @@ class UserUpdate(BaseModel):
     name: str | None = None
     role: str | None = None
     status: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=1024)
 
 
 def _iso(value: Any) -> str | None:
@@ -100,13 +103,16 @@ async def create_user(
     )
     if existing is not None:
         raise HTTPException(status_code=409, detail="email already exists")
+    password_hash = await run_in_threadpool(hash_password, body.password)
     row = await db.fetch_one(
-        "INSERT INTO iam.users (tenant_id, email, name, role, status) "
-        "VALUES (:p0, :p1, :p2, :p3, :p4) "
+        "INSERT INTO iam.users "
+        "(tenant_id, email, name, password_hash, role, status) "
+        "VALUES (:p0, :p1, :p2, :p3, :p4, :p5) "
         "RETURNING id, tenant_id, email, name, role, status, created_at",
         principal.tenant_id,
         body.email,
         body.name,
+        password_hash,
         body.role,
         body.status,
     )
@@ -140,7 +146,7 @@ async def update_user(
     principal: Principal = Depends(require_admin),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
-    """Update a user's name/role/status (admin only)."""
+    """Update a user's profile and optionally reset the local password."""
     existing = await db.fetch_one(
         "SELECT id FROM iam.users WHERE id = :p0 AND tenant_id = :p1",
         user_id,
@@ -166,6 +172,14 @@ async def update_user(
         await db.execute(
             "UPDATE iam.users SET status = :p0 WHERE id = :p1 AND tenant_id = :p2",
             body.status,
+            user_id,
+            principal.tenant_id,
+        )
+    if body.password is not None:
+        password_hash = await run_in_threadpool(hash_password, body.password)
+        await db.execute(
+            "UPDATE iam.users SET password_hash = :p0 WHERE id = :p1 AND tenant_id = :p2",
+            password_hash,
             user_id,
             principal.tenant_id,
         )

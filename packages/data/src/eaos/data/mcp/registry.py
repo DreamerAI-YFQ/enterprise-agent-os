@@ -139,10 +139,20 @@ class ToolRegistry:
         # C07: Block write tools from unguarded call_tool path
         if tool_name in self._write_tools:
             return McpToolResult(
-                content=[{"type": "text", "text": _json_str({
-                    "error": "write tool must be called via call_write_tool with full context",
-                    "tool": tool_name,
-                })}],
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": (
+                                    "write tool must be called via call_write_tool "
+                                    "with full context"
+                                ),
+                                "tool": tool_name,
+                            }
+                        ),
+                    }
+                ],
                 is_error=True,
                 error_message="write tool requires governed execution path",
             )
@@ -151,9 +161,7 @@ class ToolRegistry:
         if mcp_result is not None:
             return mcp_result
 
-        internal_result = await self._try_internal_call(
-            tool_name, arguments, tenant_id
-        )
+        internal_result = await self._try_internal_call(tool_name, arguments, tenant_id)
         if internal_result is not None:
             return internal_result
 
@@ -195,18 +203,32 @@ class ToolRegistry:
 
         if tool_name not in self._write_tools:
             return McpToolResult(
-                content=[{"type": "text", "text": _json_str({
-                    "error": f"not a registered write tool: {tool_name}",
-                })}],
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": f"not a registered write tool: {tool_name}",
+                            }
+                        ),
+                    }
+                ],
                 is_error=True,
                 error_message=f"unknown write tool: {tool_name}",
             )
 
         if self._write_pipeline is None:
             return McpToolResult(
-                content=[{"type": "text", "text": _json_str({
-                    "error": "write pipeline not configured",
-                })}],
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": "write pipeline not configured",
+                            }
+                        ),
+                    }
+                ],
                 is_error=True,
                 error_message="write pipeline not configured",
             )
@@ -225,7 +247,8 @@ class ToolRegistry:
         import hashlib
         import json
 
-        raw = f"{ctx.tenant_id}:{ctx.session_id}:{tool_name}:{json.dumps(transformed_args, sort_keys=True, default=str)}"
+        serialized_args = json.dumps(transformed_args, sort_keys=True, default=str)
+        raw = f"{ctx.tenant_id}:{ctx.user_id}:{ctx.session_id}:{tool_name}:{serialized_args}"
         idempotency_key = hashlib.sha256(raw.encode()).hexdigest()[:32]
 
         # Build WriteIntent from context + tool spec + arguments
@@ -247,21 +270,109 @@ class ToolRegistry:
 
         try:
             outcome = await self._write_pipeline.execute(intent)
-        except WriteApprovalRequired as exc:
+        except WriteApprovalRequired:
             # Re-raise for the caller (runner) to handle HITL flow
             raise
 
+        return self._write_outcome_result(outcome)
+
+    async def resume_write_tool(self, approval: dict[str, Any]) -> McpToolResult:
+        """Rebuild and execute the server-persisted intent for an approval.
+
+        The client cannot supply replacement tool arguments on resume.  Tool,
+        resource, operation, principal, session, trace and idempotency key all
+        come from the approval record written before the graph interrupt.
+        """
+        from dataclasses import replace
+
+        from eaos.harness.write_pipeline import WriteIntent
+        from eaos.observability._global import get_global_tracer
+
+        if self._write_pipeline is None:
+            return McpToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": "write pipeline not configured",
+                            }
+                        ),
+                    }
+                ],
+                is_error=True,
+                error_message="write pipeline not configured",
+            )
+
+        intent = WriteIntent.from_approval_record(approval)
+        tracer = get_global_tracer()
+        execution_trace_id = await tracer.current_trace_id() if tracer is not None else None
+        if execution_trace_id is not None:
+            intent = replace(intent, trace_id=execution_trace_id)
+        spec = self._write_tools.get(intent.tool_name)
+        if spec is None:
+            return McpToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": (
+                                    f"approval references unknown write tool: {intent.tool_name}"
+                                ),
+                            }
+                        ),
+                    }
+                ],
+                is_error=True,
+                error_message="approval references unknown write tool",
+            )
+        if (
+            spec["resource"] != intent.resource
+            or spec["operation"] != intent.operation
+            or spec["risk_level"] != intent.risk_level
+            or intent.risk_level != "high"
+        ):
+            return McpToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": _json_str(
+                            {
+                                "error": "approval intent no longer matches the registered tool",
+                            }
+                        ),
+                    }
+                ],
+                is_error=True,
+                error_message="approval intent does not match tool registration",
+            )
+
+        outcome = await self._write_pipeline.execute(intent)
+        return self._write_outcome_result(outcome)
+
+    @staticmethod
+    def _write_outcome_result(outcome: Any) -> McpToolResult:
         return McpToolResult(
-            content=[{"type": "text", "text": _json_str({
-                "success": outcome.success,
-                "before": outcome.before,
-                "after": outcome.after,
-                "error": outcome.error,
-                "audit_id": str(outcome.audit_id) if outcome.audit_id else None,
-                "rolled_back": outcome.rolled_back,
-                "rollback_error": outcome.rollback_error,
-                "approval_id": str(outcome.approval_id) if outcome.approval_id else None,
-            })}],
+            content=[
+                {
+                    "type": "text",
+                    "text": _json_str(
+                        {
+                            "success": outcome.success,
+                            "before": outcome.before,
+                            "after": outcome.after,
+                            "error": outcome.error,
+                            "audit_id": str(outcome.audit_id) if outcome.audit_id else None,
+                            "rolled_back": outcome.rolled_back,
+                            "rollback_error": outcome.rollback_error,
+                            "approval_id": str(outcome.approval_id)
+                            if outcome.approval_id
+                            else None,
+                        }
+                    ),
+                }
+            ],
             is_error=not outcome.success,
             error_message=outcome.error,
         )
@@ -367,9 +478,7 @@ class ToolRegistry:
             for op in _INTERNAL_OPERATIONS:
                 suffix = f"_{op}"
                 if tool_name == f"{connector_name}{suffix}":
-                    return await self._dispatch_internal(
-                        connector, op, arguments, tenant_id
-                    )
+                    return await self._dispatch_internal(connector, op, arguments, tenant_id)
         return None
 
     async def _dispatch_internal(
@@ -394,9 +503,7 @@ class ToolRegistry:
                         for r in resources
                     ]
                 }
-                return McpToolResult(
-                    content=[{"type": "text", "text": _json_str(payload)}]
-                )
+                return McpToolResult(content=[{"type": "text", "text": _json_str(payload)}])
 
             resource = arguments.get("resource")
             if not isinstance(resource, str) or resource == "":
@@ -415,9 +522,7 @@ class ToolRegistry:
                 query = _build_read_query(arguments)
                 result = await connector.read(tenant_id, resource, query)
                 payload = {"rows": result.rows, "total": result.total}
-                return McpToolResult(
-                    content=[{"type": "text", "text": _json_str(payload)}]
-                )
+                return McpToolResult(content=[{"type": "text", "text": _json_str(payload)}])
 
             # describe_schema
             schema = await connector.describe_schema(tenant_id, resource)
@@ -427,15 +532,11 @@ class ToolRegistry:
                 "relations": schema.relations,
                 "sample_rows": schema.sample_rows,
             }
-            return McpToolResult(
-                content=[{"type": "text", "text": _json_str(payload)}]
-            )
+            return McpToolResult(content=[{"type": "text", "text": _json_str(payload)}])
         except Exception as exc:
             logger.exception("internal connector call failed: %s", operation)
             return McpToolResult(
-                content=[
-                    {"type": "text", "text": _json_str({"error": str(exc)})}
-                ],
+                content=[{"type": "text", "text": _json_str({"error": str(exc)})}],
                 is_error=True,
                 error_message=str(exc),
             )

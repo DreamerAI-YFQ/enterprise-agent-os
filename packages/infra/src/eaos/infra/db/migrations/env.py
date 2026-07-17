@@ -12,9 +12,14 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
+
+# Match the application configuration flow for local development while still
+# allowing deployment environments to override every value explicitly.
+load_dotenv()
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -22,9 +27,10 @@ if config.config_file_name is not None:
 
 def _get_url() -> str:
     """Read DB URL from env, converting asyncpg -> psycopg for sync migrations."""
-    url = os.getenv("EAOS_DB__URL", "")
-    if not url:
-        raise RuntimeError("EAOS_DB__URL environment variable is not set")
+    url = os.getenv(
+        "EAOS_DB__URL",
+        "postgresql+asyncpg://eaos:eaos@localhost:5432/eaos",
+    )
     return url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
 
 

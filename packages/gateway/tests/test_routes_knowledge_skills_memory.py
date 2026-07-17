@@ -90,9 +90,7 @@ class TestKnowledgeSearch:
 
         app = create_app(_config())
         app.state.knowledge_engine = engine
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/knowledge/search",
                 json={"query": "how to use ERP API"},
@@ -110,9 +108,7 @@ class TestKnowledgeSearch:
 
         app = create_app(_config())
         app.state.knowledge_engine = engine
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/knowledge/search",
                 json={"query": "nothing matches"},
@@ -124,9 +120,7 @@ class TestKnowledgeSearch:
     async def test_search_no_token_returns_401(self) -> None:
         app = create_app(_config())
         app.state.knowledge_engine = AsyncMock()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/knowledge/search",
                 json={"query": "test"},
@@ -143,13 +137,14 @@ class TestSkillsList:
     async def test_list_my_skills(self) -> None:
         skills = [_skill_spec(name="skill-1"), _skill_spec(name="skill-2")]
         registry: Any = AsyncMock()
-        registry.list_by_tenant = AsyncMock(return_value=skills)
+        registry.list_by_tenant = AsyncMock(return_value=[])
+        resolver: Any = AsyncMock()
+        resolver.resolve_for_user = AsyncMock(return_value=skills)
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        app.state.skill_resolver = resolver
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/skills",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -162,12 +157,13 @@ class TestSkillsList:
     async def test_list_empty(self) -> None:
         registry: Any = AsyncMock()
         registry.list_by_tenant = AsyncMock(return_value=[])
+        resolver: Any = AsyncMock()
+        resolver.resolve_for_user = AsyncMock(return_value=[])
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        app.state.skill_resolver = resolver
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/skills",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -184,9 +180,7 @@ class TestSkillsGet:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/skills/{sid}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -200,9 +194,7 @@ class TestSkillsGet:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/skills/{uuid4()}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -218,9 +210,7 @@ class TestSkillsCreate:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/skills",
                 json={
@@ -238,9 +228,7 @@ class TestSkillsCreate:
         registry: Any = AsyncMock()
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/skills",
                 json={
@@ -263,9 +251,7 @@ class TestSkillsPublish:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 f"/skills/{sid}/publish",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -281,9 +267,7 @@ class TestSkillsPublish:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 f"/skills/{sid}/publish",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -299,9 +283,7 @@ class TestAdminSkills:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/skills",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -312,9 +294,7 @@ class TestAdminSkills:
     async def test_employee_cannot_access_admin(self) -> None:
         app = create_app(_config())
         app.state.skill_registry = AsyncMock()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/skills",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -329,9 +309,7 @@ class TestAdminSkills:
 
         app = create_app(_config())
         app.state.skill_registry = registry
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 f"/admin/skills/{sid}/deprecate",
                 json={"reason": "obsolete"},
@@ -370,9 +348,7 @@ class TestMemoryList:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=rows)
         app.state.memory_engine = AsyncMock()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/memory",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -386,9 +362,7 @@ class TestMemoryList:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[])
         app.state.memory_engine = AsyncMock()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/memory",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -400,9 +374,7 @@ class TestMemoryList:
         app = create_app(_config())
         app.state.db = _mock_db()
         app.state.memory_engine = AsyncMock()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/memory")
         assert resp.status_code == 401
 
@@ -412,9 +384,7 @@ class TestMemoryDelete:
         mid = uuid4()
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"id": mid})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/memory/{mid}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -425,9 +395,7 @@ class TestMemoryDelete:
     async def test_delete_not_found(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/memory/{uuid4()}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},

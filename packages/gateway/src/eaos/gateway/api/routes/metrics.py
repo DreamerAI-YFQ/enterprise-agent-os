@@ -61,8 +61,7 @@ async def get_metrics(
         principal.tenant_id,
     )
     pending_approvals = await db.fetch_val(
-        "SELECT COUNT(*) FROM harness.approvals "
-        "WHERE tenant_id = :p0 AND status = 'pending'",
+        "SELECT COUNT(*) FROM harness.approvals WHERE tenant_id = :p0 AND status = 'pending'",
         principal.tenant_id,
     )
     unread_notifications = await db.fetch_val(
@@ -74,8 +73,6 @@ async def get_metrics(
 
     end = end_time or datetime.utcnow()
     start = start_time or (end - timedelta(days=7))
-    interval = _GRANULARITY_INTERVAL.get(granularity, "1 day")
-
     activity = await db.fetch(
         f"SELECT DATE_TRUNC('{granularity}', created_at) AS bucket, "
         f"COUNT(*) AS count "
@@ -97,10 +94,7 @@ async def get_metrics(
             "pending_approvals": int(pending_approvals or 0),
             "unread_notifications": int(unread_notifications or 0),
         },
-        "activity": [
-            {"bucket": str(r["bucket"]), "sessions": int(r["count"])}
-            for r in activity
-        ],
+        "activity": [{"bucket": str(r["bucket"]), "sessions": int(r["count"])} for r in activity],
         "time_range": {"start": start.isoformat(), "end": end.isoformat()},
         "granularity": granularity,
     }
@@ -139,8 +133,7 @@ async def export_metrics(
         principal.tenant_id,
     )
     pending_approvals = await db.fetch_val(
-        "SELECT COUNT(*) FROM harness.approvals "
-        "WHERE tenant_id = :p0 AND status = 'pending'",
+        "SELECT COUNT(*) FROM harness.approvals WHERE tenant_id = :p0 AND status = 'pending'",
         principal.tenant_id,
     )
 

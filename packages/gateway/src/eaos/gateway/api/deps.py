@@ -47,7 +47,7 @@ async def get_db(request: Request) -> DbClient:
     return request.app.state.db  # type: ignore[no-any-return]
 
 
-async def get_redis(request: Request) -> "RedisClient":
+async def get_redis(request: Request) -> RedisClient:
     """Get the Redis client singleton from app.state."""
     return request.app.state.redis  # type: ignore[no-any-return]
 

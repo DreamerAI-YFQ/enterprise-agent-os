@@ -1,0 +1,76 @@
+profile_id: "answer-core-v1"
+profile_version: "1.0.0"
+purpose: "16-case preregistered RAG answer-generation, citation, abstention, and permission core"
+
+dataset_path: "benchmarks/competition/datasets/rag_answers_core_v1.yaml"
+dataset_sha256: "029932099d6b4fac90f05e6ada22b3c1fab8c852fe6b8484c0b6d51b697c5cb0"
+
+selection:
+  source_profile: "core-v1"
+  source_dataset_path: "benchmarks/competition/datasets/rag_queries_core_v1.yaml"
+  selected_case_count: 16
+  selected_case_ids:
+    - "RAG-021"
+    - "RAG-031"
+    - "RAG-054"
+    - "RAG-063"
+    - "RAG-017"
+    - "RAG-046"
+    - "RAG-062"
+    - "RAG-003"
+    - "RAG-114"
+    - "RAG-115"
+    - "RAG-124"
+    - "RAG-129"
+    - "RAG-131"
+    - "RAG-136"
+    - "RAG-149"
+    - "RAG-147"
+  composition:
+    fact: 4
+    list: 3
+    summary: 3
+    no_answer: 3
+    permission: 3
+  result_independent: true
+
+evaluation:
+  evaluator_version: "rag-answer-v1.1"
+  invocation: "real Agent SSE with mode=rag and configured generation model"
+  content_judgment: "audited claim-group recall"
+  citation_judgment: "response citation number mapped to the actual ranked retrieval evidence and gold document label"
+  abstention_judgment: "explicit no-evidence or access-denial response; silent empty output does not pass"
+  formal_hard_gates_required_for_claims: true
+  thresholds:
+    answer_content_recall: 0.80
+    answer_content_pass_rate: 0.80
+    citation_presence_rate: 0.90
+    citation_valid_marker_rate: 0.95
+    citation_relevance_precision: 0.80
+    no_answer_abstention_accuracy: 0.90
+    permission_abstention_accuracy: 1.00
+    permission_zero_leak_rate: 1.00
+    overall_case_pass_rate: 0.80
+
+permission_fixture:
+  required_for_formal: true
+  exact_selected_permission_queries: true
+  canary_kinds: ["cross_tenant", "foreign_department", "foreign_personal"]
+  real_embedding_required: true
+  zero_retrieval_required: true
+  zero_response_leak_required: true
+  exact_cleanup_required: true
+
+formal_hard_gates:
+  - "source tree is clean before the run"
+  - "profile ID and dataset SHA-256 match"
+  - "dataset frozen_date and approved answer gold are locked"
+  - "all 16 case IDs execute once in frozen order"
+  - "every response comes from a successful real Agent SSE invocation"
+  - "three dynamically embedded permission canaries are inserted and exactly cleaned"
+  - "quality thresholds pass without dropping or replacing failed cases"
+
+boundaries:
+  - "This profile does not claim retrieval Hit@K, Recall@K, nDCG, or MRR; those belong to core-v1."
+  - "Claim groups measure audited answer coverage, not open-ended semantic equivalence."
+  - "Citation relevance maps numbered citations to returned gold documents; it is not a general entailment score."

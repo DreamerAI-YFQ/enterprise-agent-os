@@ -22,7 +22,7 @@ import httpx
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "benchmarks" / "competition"))
 
-from runners.run_eval import API_BASE, ADMIN_EMAIL, ADMIN_PASSWORD, login
+from runners.run_eval import ADMIN_EMAIL, ADMIN_PASSWORD, API_BASE, login  # noqa: E402
 
 # Default tenant ID (acme)
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -987,7 +987,8 @@ PRD-006 在仓库 WH-02 的库存数量为 200，库龄 120 天（>90天，慢�
 - 状态: 缺货（库存低于安全库存）
 
 ## 库存描述
-PRD-007 在仓库 WH-02 的库存数量仅 10，低于安全库存 50，处于缺货状态，批次号 BAT-2024-001，周转率 5.5。
+PRD-007 在仓库 WH-02 的库存数量仅 10，低于安全库存 50，处于缺货状态，
+批次号 BAT-2024-001，周转率 5.5。
 """,
         "metadata": {"doc_id": "KB-INV-007", "category": "库存"},
     },
@@ -2027,7 +2028,10 @@ async def main():
                     print(f"  [{i+1}/{len(DOCUMENTS)}] ✓ {doc['title']} ({chunk_count} chunks)")
                     success += 1
                 else:
-                    print(f"  [{i+1}/{len(DOCUMENTS)}] ✗ {doc['title']}: HTTP {resp.status_code} {resp.text[:100]}")
+                    print(
+                        f"  [{i+1}/{len(DOCUMENTS)}] ✗ {doc['title']}: "
+                        f"HTTP {resp.status_code} {resp.text[:100]}"
+                    )
                     failed += 1
             except Exception as e:
                 print(f"  [{i+1}/{len(DOCUMENTS)}] ✗ {doc['title']}: {e}")

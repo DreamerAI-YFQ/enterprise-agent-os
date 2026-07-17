@@ -44,9 +44,28 @@ def _mock_db(
     """Build a mock DbClient with configurable fetch/fetch_one results."""
     db: Any = AsyncMock()
     db.fetch = AsyncMock(return_value=fetch_rows or [])
+    db.fetch_all = AsyncMock(return_value=[])
     db.fetch_one = AsyncMock(return_value=single_row)
     db.execute = AsyncMock(return_value=None)
     return db
+
+
+class _StubSpan:
+    def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class _StubTracer:
+    async def span(self, *_args: Any, **_kwargs: Any) -> Any:
+        yield _StubSpan()
+
+
+def _wire_invoke_dependencies(app: Any, runner: Any) -> None:
+    app.state.runner = runner
+    # Explicitly wire every required production dependency. Using the runner
+    # as the orchestrator in a route unit test intentionally exercises SINGLE.
+    app.state.orchestrator = runner
+    app.state.tracer = _StubTracer()
 
 
 def _session_row(
@@ -97,9 +116,7 @@ class TestListSessions:
         rows = [_session_row(session_id=sid, user_id=EMP_ID)]
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=rows)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/sessions",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -113,9 +130,7 @@ class TestListSessions:
     async def test_empty_list(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[])
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/sessions",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -126,18 +141,14 @@ class TestListSessions:
     async def test_no_token_returns_401(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/sessions")
         assert resp.status_code == 401
 
     async def test_limit_query_param_accepted(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[])
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/sessions?limit=10",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -154,10 +165,9 @@ class TestGetSession:
     async def test_get_existing_session(self) -> None:
         sid = uuid4()
         app = create_app(_config())
-        app.state.db = _mock_db(single_row=_session_row(session_id=sid))
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        db = _mock_db(single_row=_session_row(session_id=sid))
+        app.state.db = db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{sid}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -166,13 +176,31 @@ class TestGetSession:
         data = resp.json()
         assert data["id"] == str(sid)
         assert data["agent_id"] == str(AGENT_ID)
+        ownership_call = db.fetch_one.call_args
+        assert "tenant_id = :p1" in ownership_call.args[0]
+        assert "user_id = :p2" in ownership_call.args[0]
+        assert ownership_call.args[1:] == (sid, TID, EMP_ID)
+
+    async def test_admin_access_remains_tenant_scoped(self) -> None:
+        sid = uuid4()
+        app = create_app(_config())
+        db = _mock_db(single_row=_session_row(session_id=sid))
+        app.state.db = db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get(
+                f"/sessions/{sid}",
+                headers={"Authorization": f"Bearer {_admin_token()}"},
+            )
+        assert resp.status_code == 200
+        ownership_call = db.fetch_one.call_args
+        assert "tenant_id = :p1" in ownership_call.args[0]
+        assert "user_id = :p2" not in ownership_call.args[0]
+        assert ownership_call.args[1:] == (sid, TID)
 
     async def test_not_found_returns_404(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{uuid4()}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -183,9 +211,7 @@ class TestGetSession:
         """Employee cannot see another employee's session (db returns None)."""
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{uuid4()}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -209,9 +235,7 @@ class TestListMessages:
         app = create_app(_config())
         db = _mock_db(fetch_rows=msgs, single_row=session)
         app.state.db = db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{sid}/messages",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -222,15 +246,16 @@ class TestListMessages:
         assert data[0]["role"] == "user"
         assert data[1]["role"] == "assistant"
         assert data[1]["event_type"] == "final"
+        message_call = db.fetch.call_args
+        assert "session_id = :p0 AND tenant_id = :p1" in message_call.args[0]
+        assert message_call.args[1:] == (sid, TID, 100)
 
     async def test_empty_messages(self) -> None:
         sid = uuid4()
         session = _session_row(session_id=sid)
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[], single_row=session)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{sid}/messages",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -241,9 +266,7 @@ class TestListMessages:
     async def test_session_not_found_returns_404(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/sessions/{uuid4()}/messages",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -262,28 +285,44 @@ class TestDeleteSession:
         session = _session_row(session_id=sid)
         app = create_app(_config())
         app.state.db = _mock_db(single_row=session)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/sessions/{sid}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
             )
         assert resp.status_code == 204
-        # Verify execute was called (DELETE statement)
-        app.state.db.execute.assert_awaited()
+        statements = [call.args[0] for call in app.state.db.execute.await_args_list]
+        assert any("UPDATE harness.approvals" in sql for sql in statements)
+        assert any("DELETE FROM checkpoint_writes" in sql for sql in statements)
+        assert any("DELETE FROM checkpoint_blobs" in sql for sql in statements)
+        assert any("DELETE FROM checkpoints" in sql for sql in statements)
+        assert any("DELETE FROM agent.sessions" in sql for sql in statements)
+        expected_thread_id = f"tenant:{TID}:agent:{AGENT_ID}:session:{sid}"
+        checkpoint_calls = [
+            call
+            for call in app.state.db.execute.await_args_list
+            if "checkpoint_" in call.args[0] or "DELETE FROM checkpoints" in call.args[0]
+        ]
+        assert len(checkpoint_calls) == 3
+        assert all(call.args[1:] == (expected_thread_id,) for call in checkpoint_calls)
+        approval_call = next(
+            call
+            for call in app.state.db.execute.await_args_list
+            if "UPDATE harness.approvals" in call.args[0]
+        )
+        assert "status IN ('pending', 'approved')" in approval_call.args[0]
+        assert approval_call.args[1:] == (sid, TID)
 
     async def test_delete_not_found_returns_404(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/sessions/{uuid4()}",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
             )
         assert resp.status_code == 404
+        app.state.db.execute.assert_not_awaited()
 
 
 # ============================================================
@@ -297,9 +336,7 @@ class TestRenameSession:
         session = _session_row(session_id=sid, title="Old title")
         app = create_app(_config())
         app.state.db = _mock_db(single_row=session)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.patch(
                 f"/sessions/{sid}",
                 json={"title": "New title"},
@@ -312,9 +349,7 @@ class TestRenameSession:
     async def test_rename_not_found_returns_404(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.patch(
                 f"/sessions/{uuid4()}",
                 json={"title": "New title"},
@@ -348,12 +383,10 @@ class TestInvokePersistence:
         app = create_app(_config())
         db = _mock_db()
         app.state.db = db
-        app.state.runner = _StubRunner()
+        _wire_invoke_dependencies(app, _StubRunner())
 
         token = create_jwt_token(SECRET, EMP_ID, TID, "employee")
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/invoke",
                 json={"agent_id": str(AGENT_ID), "message": "Hi there"},
@@ -384,12 +417,10 @@ class TestInvokePersistence:
         app = create_app(_config())
         db = _mock_db(single_row={"id": sid})  # session exists
         app.state.db = db
-        app.state.runner = _StubRunner()
+        _wire_invoke_dependencies(app, _StubRunner())
 
         token = create_jwt_token(SECRET, EMP_ID, TID, "employee")
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/invoke",
                 json={"agent_id": str(AGENT_ID), "message": "Hi", "session_id": str(sid)},
@@ -414,12 +445,10 @@ class TestInvokePersistence:
 
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)  # session not found
-        app.state.runner = _StubRunner()
+        _wire_invoke_dependencies(app, _StubRunner())
 
         token = create_jwt_token(SECRET, EMP_ID, TID, "employee")
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/invoke",
                 json={"agent_id": str(AGENT_ID), "message": "Hi", "session_id": str(uuid4())},

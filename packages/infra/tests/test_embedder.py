@@ -10,6 +10,7 @@ import pytest
 from eaos.core.config import EmbeddingConfig
 from eaos.core.errors import LLMError
 from eaos.infra.vector.embedder import OpenAIEmbedder
+from httpx import Request, Response
 
 
 def _make_embedder(**overrides: Any) -> tuple[OpenAIEmbedder, Any]:
@@ -107,6 +108,36 @@ class TestOpenAIEmbedderErrors:
         client.embeddings.create.side_effect = openai.OpenAIError("boom")
         with pytest.raises(LLMError):
             await embedder.embed_batch(["x", "y"])
+
+    async def test_unsupported_dimensions_is_cached_after_first_retry(self) -> None:
+        embedder, first_client = _make_embedder()
+        second_client: Any = MagicMock()
+        second_client.embeddings = MagicMock()
+        second_client.embeddings.create = AsyncMock(
+            side_effect=[
+                _embedding_response([[0.1]]),
+                _embedding_response([[0.2]]),
+                _embedding_response([[0.3]]),
+            ]
+        )
+        request = Request("POST", "https://embedding.example/v1/embeddings")
+        response = Response(400, request=request)
+        first_client.embeddings.create.side_effect = openai.BadRequestError(
+            "dimensions unsupported",
+            response=response,
+            body={"message": "invalid parameter"},
+        )
+        embedder._get_client = MagicMock(  # type: ignore[method-assign]
+            side_effect=[first_client, second_client, second_client, second_client]
+        )
+
+        assert await embedder.embed("first") == [0.1]
+        assert await embedder.embed("second") == [0.2]
+        assert await embedder.embed("third") == [0.3]
+
+        assert "dimensions" in first_client.embeddings.create.call_args.kwargs
+        for call in second_client.embeddings.create.call_args_list:
+            assert "dimensions" not in call.kwargs
 
 
 class TestOpenAIEmbedderClientConstruction:

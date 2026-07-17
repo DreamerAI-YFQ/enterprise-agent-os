@@ -19,7 +19,7 @@ export interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string) => Promise<void>;
+  login: (tenantSlug: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -42,11 +42,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (email: string) => {
+    async (tenantSlug: string, email: string, password: string) => {
       setIsLoading(true);
       try {
         const { data, error } = await apiClient.POST("/auth/login", {
-          body: { email },
+          body: { tenant_slug: tenantSlug, email, password },
         });
         if (error || !data) {
           throw new Error(

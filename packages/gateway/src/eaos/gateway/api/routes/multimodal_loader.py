@@ -10,12 +10,8 @@ from __future__ import annotations
 import base64
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from eaos.infra.llm.base import Attachment
-
-if TYPE_CHECKING:
-    from eaos.core.auth import Principal
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +56,7 @@ async def load_attachment(
     # prefix before joining.
     relative_path = file_path.lstrip("/")
     if relative_path.startswith("uploads/"):
-        relative_path = relative_path[len("uploads/"):]
+        relative_path = relative_path[len("uploads/") :]
     full_path = Path(base_dir) / relative_path
     if not full_path.exists():
         raise FileNotFoundError(f"attachment not found: {full_path}")

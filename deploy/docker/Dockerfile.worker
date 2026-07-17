@@ -20,4 +20,4 @@ RUN uv sync --all-packages --no-dev
 
 # Evolution worker: polls harness.evolution_strategies and advances the
 # six-step governance pipeline (training -> shadow -> canary).
-CMD ["uv", "run", "python", "-m", "eaos_worker"]
+CMD ["/app/.venv/bin/python", "-m", "eaos_worker"]

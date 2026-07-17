@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from eaos.agent.runtime.sandbox import CodeResult
 from eaos.core.context import TenantContext
-from eaos.data.mcp.types import McpToolResult
+from eaos.data.mcp.types import McpTool, McpToolResult
 from eaos.infra.llm.base import LLMResponse
 from eaos.skills.executor import SkillExecutorImpl
 from eaos.skills.spec import (
@@ -32,6 +32,7 @@ def _spec(
     tools: list[str] | None = None,
     guardrail: GuardrailConfig | None = None,
     tool_bindings: list[ToolBinding] | None = None,
+    risk_level: RiskLevel = RiskLevel.LOW,
 ) -> SkillSpec:
     return SkillSpec(
         id=uuid4(),
@@ -42,7 +43,7 @@ def _spec(
         display_name="Skill X",
         description="desc",
         category=category,
-        risk_level=RiskLevel.LOW,
+        risk_level=risk_level,
         instructions="print('hi')",
         tools=tools or [],
         tool_bindings=tool_bindings or [],
@@ -62,9 +63,7 @@ def _ctx() -> TenantContext:
 class TestLLMExecution:
     async def test_llm_path_returns_content_and_tokens(self) -> None:
         llm = AsyncMock()
-        llm.chat.return_value = LLMResponse(
-            content="answer", prompt_tokens=10, completion_tokens=5
-        )
+        llm.chat.return_value = LLMResponse(content="answer", prompt_tokens=10, completion_tokens=5)
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
         executor = SkillExecutorImpl(llm, monitor)
@@ -128,9 +127,7 @@ class TestSandboxExecution:
         )
         executor = SkillExecutorImpl(llm, monitor, sandbox=sandbox)
 
-        result = await executor.execute(
-            _spec(tools=["code_execution"]), {"x": 1}, _ctx()
-        )
+        result = await executor.execute(_spec(tools=["code_execution"]), {"x": 1}, _ctx())
 
         assert result.success is True
         assert result.output == "42\n"
@@ -145,16 +142,14 @@ class TestSandboxExecution:
         )
         executor = SkillExecutorImpl(llm, monitor, sandbox=sandbox)
 
-        result = await executor.execute(
-            _spec(tools=["code_execution"]), {}, _ctx()
-        )
+        result = await executor.execute(_spec(tools=["code_execution"]), {}, _ctx())
 
         assert result.success is False
         assert "boom" in (result.error or "")
 
 
 class TestGuardrail:
-    async def test_production_skill_tags_needs_confirmation(self) -> None:
+    async def test_confirmation_required_skill_fails_closed(self) -> None:
         llm = AsyncMock()
         llm.chat.return_value = LLMResponse(content="ok")
         monitor = AsyncMock()
@@ -167,8 +162,11 @@ class TestGuardrail:
         )
         result = await executor.execute(spec, {}, _ctx())
 
+        assert result.success is False
+        assert "HITL" in (result.error or "")
         assert result.metadata is not None
         assert result.metadata.get("needs_confirmation") is True
+        llm.chat.assert_not_awaited()
 
     async def test_non_production_no_confirmation_tag(self) -> None:
         llm = AsyncMock()
@@ -179,6 +177,37 @@ class TestGuardrail:
 
         result = await executor.execute(_spec(), {}, _ctx())
         assert result.metadata == {}
+
+    async def test_high_risk_non_production_skill_fails_closed(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        executor = SkillExecutorImpl(llm, monitor)
+
+        result = await executor.execute(
+            _spec(risk_level=RiskLevel.HIGH),
+            {},
+            _ctx(),
+        )
+
+        assert result.success is False
+        assert "HITL" in (result.error or "")
+        assert result.metadata == {"needs_confirmation": True}
+        llm.chat.assert_not_awaited()
+
+    async def test_production_skill_without_guardrail_fails_closed(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        executor = SkillExecutorImpl(llm, monitor)
+
+        result = await executor.execute(
+            _spec(category=SkillCategory.SYSTEM_OPERATION),
+            {},
+            _ctx(),
+        )
+
+        assert result.success is False
+        assert "mandatory guardrail" in (result.error or "")
+        llm.chat.assert_not_awaited()
 
 
 class TestAutoDeprecate:
@@ -198,18 +227,34 @@ class TestToolBindings:
     """T4: tool_bindings execution path — skill becomes an action."""
 
     @staticmethod
-    def _make_registry(result: McpToolResult) -> Any:
+    def _make_registry(
+        result: McpToolResult,
+        *,
+        tool_names: list[str] | None = None,
+        write_tools: set[str] | None = None,
+    ) -> Any:
         reg: Any = MagicMock()
         reg.call_tool = AsyncMock(return_value=result)
+        names = tool_names or [
+            "erp.create_order",
+            "crm.update_lead",
+            "step1",
+            "step2",
+            "first",
+            "second",
+        ]
+        reg.list_tools = AsyncMock(
+            return_value=[McpTool(name=name, description="", input_schema={}) for name in names]
+        )
+        writes = write_tools or set()
+        reg.is_write_tool = MagicMock(side_effect=lambda name: name in writes)
         return reg
 
     async def test_single_binding_calls_tool(self) -> None:
         llm = AsyncMock()
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
-        reg = self._make_registry(
-            McpToolResult(content=[{"type": "text", "text": "ok"}])
-        )
+        reg = self._make_registry(McpToolResult(content=[{"type": "text", "text": "ok"}]))
         executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
 
         binding = ToolBinding(
@@ -218,7 +263,7 @@ class TestToolBindings:
         )
         result = await executor.execute(
             _spec(tool_bindings=[binding]),
-            {"customer": "ACME", "amount": 100},
+            {"skill_name": "skill-x", "customer": "ACME", "amount": 100},
             _ctx(),
         )
 
@@ -235,9 +280,7 @@ class TestToolBindings:
         llm = AsyncMock()
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
-        reg = self._make_registry(
-            McpToolResult(content=[{"type": "text", "text": "done"}])
-        )
+        reg = self._make_registry(McpToolResult(content=[{"type": "text", "text": "done"}]))
         executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
 
         binding = ToolBinding(
@@ -258,6 +301,13 @@ class TestToolBindings:
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
         reg: Any = MagicMock()
+        reg.list_tools = AsyncMock(
+            return_value=[
+                McpTool(name="step1", description="", input_schema={}),
+                McpTool(name="step2", description="", input_schema={}),
+            ]
+        )
+        reg.is_write_tool = MagicMock(return_value=False)
         reg.call_tool = AsyncMock(
             side_effect=[
                 McpToolResult(content=[{"type": "text", "text": "r1"}]),
@@ -270,9 +320,7 @@ class TestToolBindings:
             ToolBinding(tool_name="step1", param_mapping={}),
             ToolBinding(tool_name="step2", param_mapping={}),
         ]
-        result = await executor.execute(
-            _spec(tool_bindings=bindings), {}, _ctx()
-        )
+        result = await executor.execute(_spec(tool_bindings=bindings), {}, _ctx())
 
         assert result.success is True
         assert reg.call_tool.await_count == 2
@@ -287,6 +335,13 @@ class TestToolBindings:
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
         reg: Any = MagicMock()
+        reg.list_tools = AsyncMock(
+            return_value=[
+                McpTool(name="first", description="", input_schema={}),
+                McpTool(name="second", description="", input_schema={}),
+            ]
+        )
+        reg.is_write_tool = MagicMock(return_value=False)
         reg.call_tool = AsyncMock(
             side_effect=[
                 McpToolResult(content=[], is_error=True, error_message="denied"),
@@ -299,9 +354,7 @@ class TestToolBindings:
             ToolBinding(tool_name="first", param_mapping={}),
             ToolBinding(tool_name="second", param_mapping={}),
         ]
-        result = await executor.execute(
-            _spec(tool_bindings=bindings), {}, _ctx()
-        )
+        result = await executor.execute(_spec(tool_bindings=bindings), {}, _ctx())
 
         assert result.success is False
         assert "denied" in (result.error or "")
@@ -313,9 +366,7 @@ class TestToolBindings:
         llm = AsyncMock()
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
-        reg = self._make_registry(
-            McpToolResult(content=[{"type": "text", "text": "tool"}])
-        )
+        reg = self._make_registry(McpToolResult(content=[{"type": "text", "text": "tool"}]))
         # sandbox returns success
         session_mock = AsyncMock()
         session_mock.run_code.return_value = CodeResult(
@@ -347,9 +398,7 @@ class TestToolBindings:
         llm.chat.return_value = LLMResponse(content="llm-answer")
         monitor = AsyncMock()
         monitor.check_auto_deprecate.return_value = False
-        reg = self._make_registry(
-            McpToolResult(content=[{"type": "text", "text": "tool"}])
-        )
+        reg = self._make_registry(McpToolResult(content=[{"type": "text", "text": "tool"}]))
         executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
 
         result = await executor.execute(_spec(), {"q": "hello"}, _ctx())
@@ -358,8 +407,7 @@ class TestToolBindings:
         assert result.output == "llm-answer"
         reg.call_tool.assert_not_awaited()
 
-    async def test_tool_bindings_without_registry_falls_back_to_llm(self) -> None:
-        """If tool_registry not configured, tool_bindings silently fall back to LLM."""
+    async def test_tool_bindings_without_registry_fail_closed(self) -> None:
         llm = AsyncMock()
         llm.chat.return_value = LLMResponse(content="llm-fallback")
         monitor = AsyncMock()
@@ -368,10 +416,101 @@ class TestToolBindings:
         executor = SkillExecutorImpl(llm, monitor)
 
         binding = ToolBinding(tool_name="erp.create_order", param_mapping={})
+        result = await executor.execute(_spec(tool_bindings=[binding]), {}, _ctx())
+
+        assert result.success is False
+        assert "ToolRegistry" in (result.error or "")
+        llm.chat.assert_not_awaited()
+
+    async def test_declared_tool_without_binding_fails_closed(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        executor = SkillExecutorImpl(llm, monitor)
+
         result = await executor.execute(
-            _spec(tool_bindings=[binding]), {}, _ctx()
+            _spec(tools=["erp_read"]),
+            {"resource": "products"},
+            _ctx(),
+        )
+
+        assert result.success is False
+        assert "no executable tool bindings" in (result.error or "")
+        llm.chat.assert_not_awaited()
+
+    async def test_missing_required_tool_fails_before_any_call(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        reg = self._make_registry(
+            McpToolResult(content=[]),
+            tool_names=["available-tool"],
+        )
+        executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
+        binding = ToolBinding(tool_name="missing-tool", required=True)
+
+        result = await executor.execute(
+            _spec(tool_bindings=[binding]),
+            {},
+            _ctx(),
+        )
+
+        assert result.success is False
+        assert "unavailable" in (result.error or "")
+        reg.call_tool.assert_not_awaited()
+
+    async def test_write_bound_skill_fails_without_governed_skill_hitl(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        reg = self._make_registry(
+            McpToolResult(content=[]),
+            tool_names=["erp_create_order"],
+            write_tools={"erp_create_order"},
+        )
+        executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
+        binding = ToolBinding(tool_name="erp_create_order")
+
+        result = await executor.execute(
+            _spec(tool_bindings=[binding]),
+            {},
+            _ctx(),
+        )
+
+        assert result.success is False
+        assert "governed Skill HITL" in (result.error or "")
+        reg.call_tool.assert_not_awaited()
+
+    async def test_optional_unavailable_binding_is_skipped(self) -> None:
+        llm = AsyncMock()
+        monitor = AsyncMock()
+        reg = self._make_registry(
+            McpToolResult(content=[]),
+            tool_names=["available-tool"],
+        )
+        executor = SkillExecutorImpl(llm, monitor, tool_registry=reg)
+
+        result = await executor.execute(
+            _spec(tool_bindings=[ToolBinding(tool_name="optional-tool", required=False)]),
+            {},
+            _ctx(),
         )
 
         assert result.success is True
-        assert result.output == "llm-fallback"
-        llm.chat.assert_awaited_once()
+        assert json.loads(result.output)[0]["skipped"] is True
+        reg.call_tool.assert_not_awaited()
+
+
+class TestControlInputIsolation:
+    async def test_skill_name_is_not_sent_to_llm(self) -> None:
+        llm = AsyncMock()
+        llm.chat.return_value = LLMResponse(content="ok")
+        monitor = AsyncMock()
+        executor = SkillExecutorImpl(llm, monitor)
+
+        result = await executor.execute(
+            _spec(),
+            {"skill_name": "skill-x", "question": "hello"},
+            _ctx(),
+        )
+
+        assert result.success is True
+        messages = llm.chat.call_args.args[0]
+        assert json.loads(messages[1].content) == {"question": "hello"}

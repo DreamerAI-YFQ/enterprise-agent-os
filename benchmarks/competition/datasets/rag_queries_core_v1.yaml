@@ -1,0 +1,548 @@
+# RAG Retrieval Core Dataset v1
+# 48 cases selected before evaluation by a fixed SHA-256 rule: 8 categories x 6.
+# The source 150-case dataset remains unchanged. Gold below was re-adjudicated
+# only against scripts/competition/seed_knowledge_base.py source text.
+
+version: "core-v1"
+frozen_date: "2026-07-17"
+
+metadata:
+  total_cases: 48
+  tenant_default: "acme"
+  roles: ["employee", "admin"]
+  answer_types: ["fact", "list", "summary", "refusal", "empty"]
+  category_count: 8
+  cases_per_category: 6
+  positive_gold_cases: 36
+  no_positive_gold_cases: 12
+
+  source_dataset_path: "benchmarks/competition/datasets/rag_queries_v1.yaml"
+  source_dataset_sha256: "148d2bbee4c8bd8dfc611a5149d34411d49af0a7f1184419272c0c745dd1b264"
+  selection_profile_path: "benchmarks/competition/configs/retrieval_core_v1.yaml"
+  selection_seed: "eaos-rag-core-v1-selection-20260717"
+  selection_seed_sha256: "affa8039fd049ae2aa698c98a78c978217c3b2f49b5e40a0df35da73f405e3d5"
+  selection_algorithm: "sha256(seed + literal-backslash-n + category + literal-backslash-n + case_id), ascending within category"
+  selected_order_sha256: "1cb45b627fb870b8f93111817b71a5b5aaefd7940af47d611ac8de1c9bc7af27"
+
+  gold_review_status: "approved"
+  gold_review_scope: "all 48 selected cases"
+  gold_review_method: "exact source-text arbitration; no retrieval outputs consulted"
+  gold_source_path: "scripts/competition/seed_knowledge_base.py"
+  gold_source_sha256: "dfd7b47f6e5f8a2695160a53da499a51e2b836aa5664a49fc60a829a957fbdb8"
+  correction_ledger_path: "benchmarks/competition/datasets/rag_queries_core_v1_ledger.yaml"
+  corrected_case_count: 7
+  retained_case_count: 41
+
+  as_of_date: "2024-03-12"
+  timezone: "Asia/Shanghai"
+  week_definition: "ISO-8601 Monday through Sunday, inclusive"
+  quarter_definition: "calendar quarter, inclusive"
+
+  permission_canaries_frozen: false
+  permission_boundary: "negative cases do not prove filtering until Globex and forbidden-scope documents exist"
+  corpus_embedding_model_persisted: false
+
+  # Exact-corpus validates this complete benchmark corpus, not merely the
+  # labels referenced by the 48 selected cases.
+  corpus_label_universe:
+    - "KB-PRD-001"
+    - "KB-PRD-002"
+    - "KB-PRD-003"
+    - "KB-PRD-004"
+    - "KB-PRD-005"
+    - "KB-PRD-006"
+    - "KB-PRD-007"
+    - "KB-PRD-008"
+    - "KB-PRD-009"
+    - "KB-PRD-010"
+    - "KB-CUS-001"
+    - "KB-CUS-002"
+    - "KB-CUS-003"
+    - "KB-CUS-004"
+    - "KB-CUS-005"
+    - "KB-ORD-001"
+    - "KB-ORD-002"
+    - "KB-ORD-003"
+    - "KB-ORD-004"
+    - "KB-ORD-005"
+    - "KB-ORD-006"
+    - "KB-ORD-007"
+    - "KB-ORD-008"
+    - "KB-ORD-009"
+    - "KB-ORD-010"
+    - "KB-INV-001"
+    - "KB-INV-002"
+    - "KB-INV-003"
+    - "KB-INV-004"
+    - "KB-INV-005"
+    - "KB-INV-006"
+    - "KB-INV-007"
+    - "KB-INV-008"
+    - "KB-INV-009"
+    - "KB-INV-010"
+    - "KB-POL-001"
+    - "KB-POL-002"
+    - "KB-POL-003"
+    - "KB-POL-004"
+    - "KB-POL-005"
+    - "KB-POL-006"
+    - "KB-POL-007"
+    - "KB-POL-008"
+    - "KB-POL-009"
+    - "KB-POL-010"
+    - "KB-POL-011"
+    - "KB-POL-012"
+    - "KB-HR-001"
+    - "KB-HR-002"
+    - "KB-HR-003"
+    - "KB-HR-004"
+    - "KB-FIN-001"
+    - "KB-FIN-002"
+    - "KB-FIN-003"
+    - "KB-FIN-004"
+    - "KB-IT-001"
+    - "KB-IT-002"
+    - "KB-IT-003"
+    - "KB-IT-004"
+    - "KB-IT-005"
+
+queries:
+  # 产品查询: deterministic ranks 1..6
+  - case_id: "RAG-015"
+    query: "请列出所有单价超过 5000 元的产品 SKU。"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-002", "KB-PRD-004", "KB-PRD-005", "KB-PRD-008", "KB-PRD-009", "KB-PRD-010"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "产品查询"
+    notes: "core-v1 corrected: added PRD-005 and PRD-008"
+
+  - case_id: "RAG-003"
+    query: "PRD-002 企业交换机 SW-4800 的规格参数是什么？"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-PRD-002"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "产品查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-007"
+    query: "PRD-007 网络线缆 CAT6-3M 的长度和类别是什么？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-PRD-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "产品查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-017"
+    query: "哪些产品属于电源/机房类？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-005", "KB-PRD-008"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "产品查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-004"
+    query: "PRD-004 防火墙 FW-3000 支持哪些安全特性？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-004"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "产品查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-010"
+    query: "PRD-010 负载均衡 LB-5000 支持的算法有哪些？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-010"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "产品查询"
+    notes: "source gold retained"
+
+  # 客户查询: deterministic ranks 1..6
+  - case_id: "RAG-036"
+    query: "列出全部 5 个客户的代码与名称。"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-CUS-001", "KB-CUS-002", "KB-CUS-003", "KB-CUS-004", "KB-CUS-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-026"
+    query: "信用额度超过 50 万的客户有哪些？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-CUS-001", "KB-CUS-002", "KB-CUS-005"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-021"
+    query: "客户 CUS-001 的信用额度是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-001"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-031"
+    query: "客户 CUS-004 的联系电话是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-004"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-033"
+    query: "CUS-002 的销售负责人是谁？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-002"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-037"
+    query: "CUS-003 当前可用信用额度是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-003"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "客户查询"
+    notes: "source gold retained"
+
+  # 订单查询: deterministic ranks 1..6
+  - case_id: "RAG-055"
+    query: "哪些订单需要二级审批？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-ORD-001", "KB-ORD-003", "KB-ORD-005", "KB-ORD-009"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "订单查询"
+    notes: "core-v1 corrected: added ORD-003"
+
+  - case_id: "RAG-054"
+    query: "订单 ORD-2024-007 的备注内容是什么？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-ORD-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "订单查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-051"
+    query: "本周新增的订单一共有几笔？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-ORD-009", "KB-ORD-010"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "订单查询"
+    notes: "core-v1 corrected for as_of_date 2024-03-12; ISO week 2024-03-11..17"
+
+  - case_id: "RAG-046"
+    query: "订单 ORD-2024-005 包含哪些产品？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-ORD-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "订单查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-056"
+    query: "订单 ORD-2024-009 的预计交付日期是？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-ORD-009"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "订单查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-044"
+    query: "订单 ORD-2024-002 是谁创建的？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-ORD-002"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "订单查询"
+    notes: "source gold retained"
+
+  # 库存查询: deterministic ranks 1..6
+  - case_id: "RAG-074"
+    query: "PRD-008 UPS电源的库位编码是什么？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-INV-008"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "库存查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-072"
+    query: "PRD-005 服务器机柜的预留库存是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-INV-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "库存查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-073"
+    query: "哪些产品的库龄超过 90 天？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-INV-006", "KB-INV-008"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "库存查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-062"
+    query: "哪些产品的库存低于安全库存？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-INV-003", "KB-INV-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "库存查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-063"
+    query: "PRD-009 存储阵列的可用库存有多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-INV-009"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "库存查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-069"
+    query: "哪些仓库有 PRD-002 的库存？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-INV-002"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "库存查询"
+    notes: "source gold retained; one document contains WH-01 and WH-02 evidence"
+
+  # 跨表关联查询: deterministic ranks 1..6
+  - case_id: "RAG-086"
+    query: "CUS-005 的订单中有几笔需要审批？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-005", "KB-ORD-005", "KB-ORD-009"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "跨表关联查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-090"
+    query: "请列出每个客户购买频次最高的产品。"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-CUS-001", "KB-CUS-002", "KB-CUS-003", "KB-CUS-004", "KB-CUS-005", "KB-ORD-001", "KB-ORD-002", "KB-ORD-003", "KB-ORD-004", "KB-ORD-005", "KB-ORD-006", "KB-ORD-007", "KB-ORD-008", "KB-ORD-009", "KB-ORD-010"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "跨表关联查询"
+    notes: "core-v1 corrected: added ORD-006 through ORD-010"
+
+  - case_id: "RAG-087"
+    query: "哪些订单的产品同时涉及 PRD-002 和 PRD-004？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-ORD-004", "KB-ORD-005", "KB-PRD-002", "KB-PRD-004"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "跨表关联查询"
+    notes: "core-v1 corrected: added ORD-005"
+
+  - case_id: "RAG-085"
+    query: "PRD-001 最近被哪些订单采购？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-001", "KB-ORD-001", "KB-ORD-004", "KB-ORD-006"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "跨表关联查询"
+    notes: "core-v1 corrected: added ORD-006"
+
+  - case_id: "RAG-084"
+    query: "CUS-004 最近一笔订单买了什么产品？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-CUS-004", "KB-ORD-008", "KB-PRD-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "跨表关联查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-080"
+    query: "哪些客户购买过 PRD-004 防火墙？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-004", "KB-ORD-004", "KB-ORD-005", "KB-ORD-007", "KB-CUS-001", "KB-CUS-004", "KB-CUS-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "跨表关联查询"
+    notes: "core-v1 corrected: added ORD-005 and CUS-005"
+
+  # 知识库查询: deterministic ranks 1..6
+  - case_id: "RAG-117"
+    query: "客户信用额度调整需要谁审批？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-POL-002"]
+    tenant: "acme"
+    user_role: "admin"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-105"
+    query: "员工离职交接清单包含哪些内容？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-HR-003"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-114"
+    query: "数据分级保护的规则是什么？"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-POL-003"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-106"
+    query: "合同盖章需要哪些审批节点？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-POL-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-115"
+    query: "请说明库存盘点流程。"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-POL-011"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  - case_id: "RAG-100"
+    query: "供应商准入需要哪些资质材料？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-POL-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "知识库查询"
+    notes: "source gold retained"
+
+  # 无答案查询: deterministic ranks 1..6
+  - case_id: "RAG-122"
+    query: "CUS-006 的信用额度是多少？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; nonexistent identifier"
+
+  - case_id: "RAG-124"
+    query: "公司去年的净利润是多少？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; as_of_date makes 去年=2023"
+
+  - case_id: "RAG-133"
+    query: "市场上同类防火墙的价格对比？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; market comparison absent"
+
+  - case_id: "RAG-125"
+    query: "订单 ORD-2099-999 的状态是什么？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; nonexistent identifier"
+
+  - case_id: "RAG-129"
+    query: "公司股票代码是多少？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; listing information absent"
+
+  - case_id: "RAG-131"
+    query: "公司食堂本周菜单是什么？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案查询"
+    notes: "source gold retained; ISO week 2024-03-11..17"
+
+  # 权限隔离查询: deterministic ranks 1..6
+  - case_id: "RAG-147"
+    query: "管理层薪酬排行榜是怎样的？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "权限隔离查询"
+    notes: "retained with boundary: forbidden-scope canary not yet frozen"
+
+  - case_id: "RAG-148"
+    query: "globex 租户客户 G-CUS-003 下过哪些订单？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "admin"
+    category: "权限隔离查询"
+    notes: "retained with boundary: Globex canary not yet frozen"
+
+  - case_id: "RAG-149"
+    query: "其他租户的安全审计日志有哪些？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "admin"
+    category: "权限隔离查询"
+    notes: "retained with boundary: retrieval corpus has no audit-log canary"
+
+  - case_id: "RAG-137"
+    query: "globex 租户的订单 ORD-G-001 详情是什么？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "权限隔离查询"
+    notes: "retained with boundary: Globex canary not yet frozen"
+
+  - case_id: "RAG-144"
+    query: "请汇总 globex 租户本季度的销售数据。"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "admin"
+    category: "权限隔离查询"
+    notes: "retained with boundary: Q1 2024; Globex canary not yet frozen"
+
+  - case_id: "RAG-136"
+    query: "请列出 globex 租户下的所有客户。"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "权限隔离查询"
+    notes: "retained with boundary: Globex canary not yet frozen"

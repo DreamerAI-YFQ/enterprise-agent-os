@@ -7,11 +7,7 @@ import { HitlCallout } from "./hitl-callout";
 
 interface MessageBubbleProps {
   message: ChatMessage;
-  onApprove?: (
-    messageId: string,
-    decision: "approved" | "rejected",
-    reason?: string
-  ) => void;
+  onResumeApproval?: (messageId: string) => void;
 }
 
 /** Render image thumbnails (click to open) and file chips for attachments. */
@@ -68,7 +64,7 @@ function AttachmentList({ items }: { items: AttachmentRef[] }) {
   );
 }
 
-export function MessageBubble({ message, onApprove }: MessageBubbleProps) {
+export function MessageBubble({ message, onResumeApproval }: MessageBubbleProps) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -122,13 +118,12 @@ export function MessageBubble({ message, onApprove }: MessageBubbleProps) {
 
           {message.status === "awaiting_approval" &&
             message.approvalId &&
-            onApprove && (
+            onResumeApproval && (
               <HitlCallout
                 approvalId={message.approvalId}
                 disabled={false}
-                onDecide={(decision, reason) =>
-                  onApprove(message.id, decision, reason)
-                }
+                error={message.error}
+                onResume={() => onResumeApproval(message.id)}
               />
             )}
         </div>

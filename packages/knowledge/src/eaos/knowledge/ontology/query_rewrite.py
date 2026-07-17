@@ -7,6 +7,7 @@ and expands relations ("张三的项目" -> project.lead=张三 OR project.membe
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
     from eaos.infra.llm.router import LLMRouter
     from eaos.knowledge.ontology.model import OntologyNode
     from eaos.knowledge.ontology.repository import OntologyRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -64,9 +68,7 @@ class OntologyQueryRewriter:
         self._llm = llm
         self._top_k = top_k
 
-    def _build_user_prompt(
-        self, query: str, nodes: list[OntologyNode]
-    ) -> str:
+    def _build_user_prompt(self, query: str, nodes: list[OntologyNode]) -> str:
         """Build the user message with ontology context."""
         nodes_json = json.dumps(
             [
@@ -103,9 +105,13 @@ class OntologyQueryRewriter:
         if not isinstance(entities, list):
             entities = []
 
+        rewritten = data.get("rewritten", original)
+        if not isinstance(rewritten, str) or not rewritten.strip():
+            rewritten = original
+
         return RewrittenQuery(
             original=original,
-            rewritten=data.get("rewritten", original),
+            rewritten=rewritten,
             entities=entities,
             ontology_refs=node_ids,
             expansion_notes=data.get("notes"),
@@ -115,14 +121,36 @@ class OntologyQueryRewriter:
         """Rewrite a natural language query using ontology context."""
         from eaos.infra.llm.base import Message
 
-        nodes = await self._repo.search_nodes(tenant_id, query, top_k=self._top_k)
+        try:
+            nodes = await self._repo.search_nodes(tenant_id, query, top_k=self._top_k)
+        except Exception as exc:  # noqa: BLE001 - retrieval must survive dependency failure
+            logger.warning("ontology lookup failed; using original query", exc_info=True)
+            return RewrittenQuery(
+                original=query,
+                rewritten=query,
+                entities=[],
+                ontology_refs=[],
+                expansion_notes=(
+                    f"ontology lookup failed ({type(exc).__name__}); using original query"
+                ),
+            )
         node_ids = [n.id for n in nodes]
 
         messages = [
             Message(role="system", content=self.SYSTEM_PROMPT),
             Message(role="user", content=self._build_user_prompt(query, nodes)),
         ]
-        response = await self._llm.chat(
-            messages, task_type="query_rewrite", temperature=0.3
-        )
+        try:
+            response = await self._llm.chat(messages, task_type="query_rewrite", temperature=0.3)
+        except Exception as exc:  # noqa: BLE001 - retrieval must survive LLM failure
+            logger.warning("LLM query rewrite failed; using original query", exc_info=True)
+            return RewrittenQuery(
+                original=query,
+                rewritten=query,
+                entities=[],
+                ontology_refs=node_ids,
+                expansion_notes=(
+                    f"LLM query rewrite failed ({type(exc).__name__}); using original query"
+                ),
+            )
         return self._parse_llm_response(response, query, node_ids)

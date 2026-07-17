@@ -77,3 +77,5 @@ uploads/
 
 # Competition evidence artifacts (generated, not committed)
 artifacts/competition-evidence/
+artifacts/db-snapshots/
+benchmarks/competition/results/

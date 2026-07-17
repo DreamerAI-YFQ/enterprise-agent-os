@@ -70,7 +70,7 @@ export default function BiDataPage() {
     enabled: datasources.length > 0,
   });
 
-  const tables = tablesQuery.data ?? [];
+  const tables = useMemo(() => tablesQuery.data ?? [], [tablesQuery.data]);
 
   const filteredTables = useMemo(() => {
     if (!tableSearch.trim()) return tables;

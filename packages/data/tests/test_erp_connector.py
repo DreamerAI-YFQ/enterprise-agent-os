@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
+import pytest
 from eaos.data.connector import (
     DataResult,
     ReadQuery,
@@ -74,6 +75,22 @@ class TestRead:
         sql = db.fetch.call_args.args[0]
         assert "name, sku" in sql
 
+    async def test_selects_whitelisted_metadata_fields(self) -> None:
+        c, db = _make_connector()
+        db.fetch.return_value = []
+        db.fetch_one.return_value = {"total": 0}
+        query = ReadQuery(fields=["id", "tenant_id", "created_at"], limit=5)
+        await c.read(TID, "products", query)
+        sql = db.fetch.call_args.args[0]
+        assert "id, tenant_id, created_at" in sql
+
+    async def test_rejects_sql_injection_in_select_fields(self) -> None:
+        c, db = _make_connector()
+        query = ReadQuery(fields=["name", "name FROM erp.products; DROP TABLE erp.orders; --"])
+        with pytest.raises(ValueError, match="disallowed read field"):
+            await c.read(TID, "products", query)
+        db.fetch.assert_not_called()
+
     async def test_filters_applied(self) -> None:
         c, db = _make_connector()
         db.fetch.return_value = []
@@ -92,7 +109,33 @@ class TestRead:
         await c.read(TID, "products", query)
         sql = db.fetch.call_args.args[0]
         assert "ORDER BY" in sql
-        assert "name asc" in sql
+        assert "name ASC" in sql
+
+    async def test_order_by_metadata_field_and_desc_are_allowed(self) -> None:
+        c, db = _make_connector()
+        db.fetch.return_value = []
+        db.fetch_one.return_value = {"total": 0}
+        await c.read(
+            TID,
+            "inventory",
+            ReadQuery(order_by=[("updated_at", "desc")], limit=10),
+        )
+        sql = db.fetch.call_args.args[0]
+        assert "ORDER BY updated_at DESC" in sql
+
+    async def test_rejects_sql_injection_in_order_by_column(self) -> None:
+        c, db = _make_connector()
+        query = ReadQuery(order_by=[("name; DROP TABLE erp.orders; --", "asc")])
+        with pytest.raises(ValueError, match="disallowed order_by field"):
+            await c.read(TID, "products", query)
+        db.fetch.assert_not_called()
+
+    async def test_rejects_sql_injection_in_order_by_direction(self) -> None:
+        c, db = _make_connector()
+        query = ReadQuery(order_by=[("name", "ASC; DROP TABLE erp.orders; --")])
+        with pytest.raises(ValueError, match="disallowed order_by direction"):
+            await c.read(TID, "products", query)
+        db.fetch.assert_not_called()
 
     async def test_tenant_id_is_first_param(self) -> None:
         """Gap #7: tenant_id must be the first parameter for isolation."""
@@ -167,6 +210,87 @@ class TestWriteCreate:
         )
         assert not result.success
         assert "disallowed" in (result.error or "")
+
+
+class TestOrderArgumentResolution:
+    async def test_generated_order_numbers_are_high_entropy(self) -> None:
+        c, db = _make_connector()
+        customer_id = uuid4()
+        product_id = uuid4()
+        db.fetch_one.side_effect = [
+            {"id": customer_id},
+            {"id": product_id, "unit_price": 10},
+            None,
+            {"id": customer_id},
+            {"id": product_id, "unit_price": 10},
+            None,
+        ]
+        first = WriteOperation(
+            operation="create",
+            data={
+                "customer_code": "C001",
+                "product_sku": "P001",
+                "quantity": 1,
+            },
+        )
+        second = WriteOperation(
+            operation="create",
+            data={
+                "customer_code": "C001",
+                "product_sku": "P001",
+                "quantity": 1,
+            },
+        )
+
+        await c.write(TID, "orders", first)
+        await c.write(TID, "orders", second)
+
+        assert first.data["order_no"].startswith("ORD-")
+        assert second.data["order_no"].startswith("ORD-")
+        assert first.data["order_no"] != second.data["order_no"]
+        assert len(first.data["order_no"]) >= 36
+
+    async def test_unknown_customer_returns_business_error_without_sql(self) -> None:
+        c, db = _make_connector()
+        db.fetch_one.side_effect = [None, None]
+
+        result = await c.write(
+            TID,
+            "orders",
+            WriteOperation(
+                operation="create",
+                data={
+                    "customer_code": "MISSING",
+                    "product_sku": "P001",
+                    "quantity": 1,
+                },
+            ),
+        )
+
+        assert result.success is False
+        assert result.error == "customer not found: MISSING"
+        db.execute.assert_not_awaited()
+
+    async def test_unknown_product_returns_business_error_without_sql(self) -> None:
+        c, db = _make_connector()
+        db.fetch_one.side_effect = [{"id": uuid4()}, None, None]
+
+        result = await c.write(
+            TID,
+            "orders",
+            WriteOperation(
+                operation="create",
+                data={
+                    "customer_code": "C001",
+                    "product_sku": "MISSING",
+                    "quantity": 1,
+                },
+            ),
+        )
+
+        assert result.success is False
+        assert result.error == "product not found: MISSING"
+        db.execute.assert_not_awaited()
 
     async def test_sql_injection_attempt_rejected(self) -> None:
         """Column whitelist prevents SQL injection via column names."""

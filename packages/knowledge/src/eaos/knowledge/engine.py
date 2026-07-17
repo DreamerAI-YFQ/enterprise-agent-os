@@ -6,8 +6,11 @@ rewriting, RAG retrieval, memory recall, and merges results.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
+
+from eaos.knowledge.rag.retriever import extract_structured_identifiers
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -18,6 +21,9 @@ if TYPE_CHECKING:
     from eaos.knowledge.ontology.query_rewrite import QueryRewriter, RewrittenQuery
     from eaos.knowledge.ontology.repository import OntologyRepository
     from eaos.knowledge.rag.pipeline import Document, RAGPipeline
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -115,15 +121,29 @@ class KnowledgeEngineImpl:
         The score on SearchResult comes from the Chunk's RRF score, not a
         hardcoded 1.0.
         """
-        rewritten = await self._rewriter.rewrite(query, tenant_id)
+        retrieval_query = query
+        # Exact business/document identifiers are deterministic lexical
+        # signals. LLM rewriting can mutate the token and turns a safe tenant
+        # non-match into an external-provider availability failure.
+        if not extract_structured_identifiers(query):
+            try:
+                rewritten = await self._rewriter.rewrite(query, tenant_id)
+                if isinstance(rewritten.rewritten, str) and rewritten.rewritten.strip():
+                    retrieval_query = rewritten.rewritten
+            except Exception:  # noqa: BLE001 - original query is the availability fallback
+                logger.warning(
+                    "query rewrite failed; retrieving with original query",
+                    exc_info=True,
+                )
 
         # C05: Load user's department IDs for permission-aware retrieval
         department_ids: list[Any] = []
         if user_id is not None and self._db is not None:
             try:
                 dept_rows = await self._db.fetch(
-                    "SELECT department_id FROM iam.department_members "
-                    "WHERE user_id = :p0 AND tenant_id = :p1",
+                    "SELECT m.department_id FROM iam.memberships m "
+                    "JOIN iam.departments d ON d.id = m.department_id "
+                    "WHERE m.user_id = :p0 AND d.tenant_id = :p1",
                     user_id,
                     tenant_id,
                 )
@@ -133,7 +153,7 @@ class KnowledgeEngineImpl:
 
         # C05: Pass user_id and department_ids to retriever for permission-pre-filter
         chunks = await self._rag.retrieve(
-            rewritten.rewritten,
+            retrieval_query,
             tenant_id,
             top_k=top_k,
             user_id=user_id,
@@ -181,8 +201,7 @@ class KnowledgeEngineImpl:
         )
 
         scope_map: dict[Any, tuple[str, Any]] = {
-            row["id"]: (row.get("scope", "enterprise"), row.get("owner_id"))
-            for row in rows
+            row["id"]: (row.get("scope", "enterprise"), row.get("owner_id")) for row in rows
         }
 
         # Query user's department IDs for department-scope visibility.
@@ -200,17 +219,15 @@ class KnowledgeEngineImpl:
         user_id: UUID,
     ) -> list[Any]:
         """Keep only chunks the user can see based on scope visibility."""
-        user_dept_ids = getattr(self, "_user_dept_ids", set())
+        user_dept_ids: set[Any] = getattr(self, "_user_dept_ids", set())
         visible: list[Any] = []
         for chunk in chunks:
-            scope, owner_id = scope_map.get(
-                getattr(chunk, "id", None), ("enterprise", None)
-            )
-            if scope == "enterprise":
-                visible.append(chunk)
-            elif scope == "personal" and owner_id == user_id:
-                visible.append(chunk)
-            elif scope == "department" and owner_id in user_dept_ids:
+            scope, owner_id = scope_map.get(getattr(chunk, "id", None), ("enterprise", None))
+            if (
+                scope == "enterprise"
+                or (scope == "personal" and owner_id == user_id)
+                or (scope == "department" and owner_id in user_dept_ids)
+            ):
                 visible.append(chunk)
         return visible
 

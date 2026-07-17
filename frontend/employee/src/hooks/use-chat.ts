@@ -41,11 +41,7 @@ export interface UseChatReturn {
   isStreaming: boolean;
   currentSessionId: string | null;
   sendMessage: (text: string, attachments?: AttachmentRef[]) => void;
-  resume: (
-    messageId: string,
-    decision: "approved" | "rejected",
-    reason?: string
-  ) => void;
+  resume: (messageId: string) => void;
   cancel: () => void;
   clear: () => void;
   loadSession: (sessionId: string) => Promise<string | undefined>;
@@ -80,6 +76,17 @@ function applyEvent(message: ChatMessage, event: AgentEvent): ChatMessage {
         next.content = event.content;
       }
       break;
+    case "approval_required": {
+      const approvalId = event.content ? parseApprovalId(event.content) : null;
+      if (approvalId) {
+        next.status = "awaiting_approval";
+        next.approvalId = approvalId;
+      } else {
+        next.status = "error";
+        next.error = "审批事件缺少 approval_id";
+      }
+      break;
+    }
     case "error": {
       const approvalId = event.content
         ? parseApprovalId(event.content)
@@ -181,11 +188,7 @@ export function useChat(agentId: string): UseChatReturn {
   );
 
   const resume = useCallback(
-    (
-      messageId: string,
-      decision: "approved" | "rejected",
-      reason?: string
-    ) => {
+    (messageId: string) => {
       const target = messages.find((m) => m.id === messageId);
       if (!target?.approvalId || !sessionIdRef.current) return;
 
@@ -200,8 +203,9 @@ export function useChat(agentId: string): UseChatReturn {
         {
           agent_id: agentIdRef.current,
           approval_id: target.approvalId,
-          decision,
-          reason: reason ?? null,
+          // The backend ignores this compatibility field and reads the real
+          // admin decision from harness.approvals.
+          decision: "approved",
         },
         {
           onEvent: (event) => {
@@ -210,7 +214,7 @@ export function useChat(agentId: string): UseChatReturn {
           onError: (err) => {
             updateMessage(messageId, (m) => ({
               ...m,
-              status: "error",
+              status: "awaiting_approval",
               error: err.message,
             }));
           },

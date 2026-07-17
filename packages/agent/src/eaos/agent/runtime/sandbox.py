@@ -12,6 +12,7 @@ import contextlib
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -103,6 +104,7 @@ class ProcessSandboxSession:
         self._workdir = workdir
         self._config = config
         self._proc: asyncio.subprocess.Process | None = None
+        self._sync_proc: subprocess.Popen[bytes] | None = None
 
     async def run_code(
         self,
@@ -127,6 +129,13 @@ class ProcessSandboxSession:
 
     async def _run(self, cmd: list[str]) -> CodeResult:
         env = self._build_env()
+        if platform.system() == "Windows":
+            # The project uses WindowsSelectorEventLoopPolicy because psycopg's
+            # async driver is incompatible with Proactor. Selector loops cannot
+            # create asyncio subprocesses, so execute the native process in a
+            # worker thread while keeping the same timeout/kill contract.
+            return await asyncio.to_thread(self._run_windows, cmd, env)
+
         preexec = self._preexec_fn()
         start = time.perf_counter()
         self._proc = await asyncio.create_subprocess_exec(
@@ -152,6 +161,43 @@ class ProcessSandboxSession:
             )
         duration_ms = int((time.perf_counter() - start) * 1000)
         exit_code = self._proc.returncode if self._proc.returncode is not None else -1
+        return self._result_from_output(stdout_b, stderr_b, exit_code, duration_ms)
+
+    def _run_windows(self, cmd: list[str], env: dict[str, str]) -> CodeResult:
+        start = time.perf_counter()
+        self._sync_proc = subprocess.Popen(  # noqa: S603 - argv list, no shell
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(self._workdir),
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            stdout_b, stderr_b = self._sync_proc.communicate(
+                timeout=self._config.timeout_sec
+            )
+        except subprocess.TimeoutExpired:
+            self._sync_proc.kill()
+            self._sync_proc.communicate()
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            return CodeResult(
+                stdout="",
+                stderr=f"timeout after {self._config.timeout_sec}s",
+                exit_code=-1,
+                duration_ms=duration_ms,
+            )
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        exit_code = self._sync_proc.returncode
+        return self._result_from_output(stdout_b, stderr_b, exit_code, duration_ms)
+
+    @staticmethod
+    def _result_from_output(
+        stdout_b: bytes,
+        stderr_b: bytes,
+        exit_code: int,
+        duration_ms: int,
+    ) -> CodeResult:
         stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
         stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
         truncated = False
@@ -168,7 +214,13 @@ class ProcessSandboxSession:
 
     def _build_env(self) -> dict[str, str]:
         # Minimal env: only PATH so the interpreter and shell commands resolve.
-        return {"PATH": os.environ.get("PATH", "")}
+        env = {"PATH": os.environ.get("PATH", "")}
+        if platform.system() == "Windows":
+            for name in ("SYSTEMROOT", "TEMP", "TMP"):
+                value = os.environ.get(name)
+                if value:
+                    env[name] = value
+        return env
 
     @staticmethod
     def _preexec_fn() -> Any:
@@ -194,6 +246,9 @@ class ProcessSandboxSession:
         if self._proc is not None and self._proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self._proc.kill()
+        if self._sync_proc is not None and self._sync_proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                self._sync_proc.kill()
 
     async def write_file(self, path: str, content: bytes) -> None:
         target = self._workdir / path

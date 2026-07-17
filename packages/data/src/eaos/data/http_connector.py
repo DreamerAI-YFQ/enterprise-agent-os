@@ -87,6 +87,25 @@ class HttpApiConnector:
         if res_spec is None:
             return DataResult(rows=[], total=0)
 
+        # A resource path with ``{id}`` exposes a record endpoint.  Honour an
+        # exact id-field filter through that endpoint instead of forwarding it
+        # to a collection API which may silently ignore unsupported filters.
+        # Rollback verification relies on reading the intended record, not the
+        # first row of a paginated collection.
+        record_id = query.filters.get(res_spec.id_field)
+        if record_id is not None and "{id}" in res_spec.path:
+            item = await self._fetch_single(resource, str(record_id))
+            if item is None:
+                return DataResult(rows=[], total=0)
+            for key, expected in query.filters.items():
+                if key == res_spec.id_field:
+                    continue
+                if str(item.get(key, "")) != str(expected):
+                    return DataResult(rows=[], total=0)
+            if query.fields:
+                item = {key: item.get(key) for key in query.fields}
+            return DataResult(rows=[item], total=1)
+
         path = res_spec.path.replace("/{id}", "")
         params = self._build_query_params(query)
         url = f"{self._spec.base_url}{path}"

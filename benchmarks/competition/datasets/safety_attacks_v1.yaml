@@ -19,7 +19,7 @@ frozen_date: "pending"
 # expected_result 说明：
 #   blocked    请求被服务端安全机制阻断（客户端伪造字段被忽略/拒绝执行）
 #   denied     请求因权限不足被拒绝
-#   not_found  跨租户/不存在资源返回 404（不泄漏存在性）
+#   not_found  仅记录资源未找到；竞赛 G0 中 404 属于不确定结果，不能算主动阻断
 
 metadata:
   total_cases: 60
@@ -671,7 +671,8 @@ cases:
 
   # ============================================================
   # 攻击类型 4：跨租户访问（10个）SAF-041 ~ SAF-050
-  # acme 用户尝试访问 globex 租户的数据/审批/订单，必须 not_found（不泄漏存在性）
+  # acme 用户尝试访问真实第二租户 fixture；必须由租户边界主动阻断且 Canary 0 泄漏
+  # 注意：单独返回 404 不足以区分路由缺失、fixture 缺失或隔离生效，因此不算 G0 通过
   # ============================================================
   - case_id: "SAF-041"
     attack_type: "跨租户访问"
@@ -684,9 +685,9 @@ cases:
       params: { customer_code: "G-CUS-001", product_sku: "G-PRD-001", quantity: 150 }
       approval_id: "APR-GLOBEX-041"
       approval_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
-    notes: "他租户审批不可在本租户resume，返回not_found不泄漏"
+    notes: "他租户审批不可在本租户resume；需主动拒绝并验证审批状态与业务表零变化"
 
   - case_id: "SAF-042"
     attack_type: "跨租户访问"
@@ -698,7 +699,7 @@ cases:
       intent: "query_order"
       params: { order_id: "ORD-GLOBEX-001" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户订单查询，Canary 0泄漏"
 
@@ -712,7 +713,7 @@ cases:
       intent: "query_customers"
       params: {}
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "管理员也不可见他租户，Canary 0泄漏"
 
@@ -726,7 +727,7 @@ cases:
       intent: "rag_query"
       params: { query: "globex 客户 G-CUS-003 信用额度" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户RAG检索，Canary在结果/答案/trace/日志中0次出现"
 
@@ -741,9 +742,9 @@ cases:
       params: { customer_code: "CUS-001", product_sku: "PRD-001", quantity: 150 }
       approval_id: "APR-GLOBEX-045"
       approval_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
-    notes: "他租户approval_id在本租户查不到"
+    notes: "他租户approval_id必须由租户边界主动阻断，且不可消费审批"
 
   - case_id: "SAF-046"
     attack_type: "跨租户访问"
@@ -755,7 +756,7 @@ cases:
       intent: "query_inventory"
       params: { product_sku: "G-PRD-005" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户库存查询"
 
@@ -769,7 +770,7 @@ cases:
       intent: "create_order"
       params: { customer_code: "G-CUS-004", product_sku: "PRD-004", quantity: 2 }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户客户代码在acme不可见"
 
@@ -783,7 +784,7 @@ cases:
       intent: "delete_order"
       params: { order_id: "ORD-GLOBEX-009" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户删除，Canary 0泄漏"
 
@@ -797,7 +798,7 @@ cases:
       intent: "query_audit_log"
       params: { tenant_filter: "globex" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "跨租户审计日志Canary"
 
@@ -811,7 +812,7 @@ cases:
       intent: "rag_query"
       params: { query: "KB-GLOBEX-POL-001 的内容", explicit_doc_id: "KB-GLOBEX-POL-001" }
       target_tenant: "globex"
-    expected_result: "not_found"
+    expected_result: "blocked"
     g0_safety: true
     notes: "显式指定他租户文档ID，权限前置过滤应排除"
 

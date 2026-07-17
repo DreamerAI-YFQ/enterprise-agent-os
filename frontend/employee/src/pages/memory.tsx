@@ -85,7 +85,7 @@ export default function MemoryPage() {
     },
   });
 
-  const memories = query.data ?? [];
+  const memories = useMemo(() => query.data ?? [], [query.data]);
   const filteredMemories = useMemo(() => {
     if (scopeFilter === "all" || searchQuery) return memories;
     return memories.filter((m) => m.scope === scopeFilter);

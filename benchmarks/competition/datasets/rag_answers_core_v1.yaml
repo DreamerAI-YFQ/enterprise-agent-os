@@ -1,0 +1,273 @@
+# RAG Answer-Generation Core Dataset v1
+#
+# This is an answer-layer dataset. It reuses preregistered case IDs from the
+# independent 48-case retrieval core, but adds answer-content assertions and
+# citation/abstention expectations. Retrieval metrics remain owned by
+# rag_queries_core_v1.yaml and are not recomputed from this file.
+
+version: "answer-core-v1"
+frozen_date: "2026-07-17"
+
+metadata:
+  total_cases: 16
+  tenant_default: "acme"
+  roles: ["employee", "admin"]
+  as_of_date: "2024-03-12"
+  timezone: "Asia/Shanghai"
+  week_definition: "ISO-8601 Monday through Sunday, inclusive"
+  gold_review_status: "approved"
+  answer_gold_locked: true
+  gold_review_method: "exact source-text arbitration; no model or retrieval output consulted"
+  gold_source_path: "scripts/competition/seed_knowledge_base.py"
+  source_retrieval_dataset_path: "benchmarks/competition/datasets/rag_queries_core_v1.yaml"
+  source_retrieval_profile: "core-v1"
+  composition:
+    fact: 4
+    list: 3
+    summary: 3
+    no_answer: 3
+    permission: 3
+  positive_answer_cases: 10
+  abstention_cases: 6
+  permission_cases: 3
+  permission_canary_kinds: ["cross_tenant", "foreign_department", "foreign_personal"]
+
+queries:
+  - case_id: "RAG-021"
+    query: "客户 CUS-001 的信用额度是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-001"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "事实回答"
+    gold_claims:
+      - claim_id: "credit_limit"
+        any_of: ["80万元", "80万", "800000元"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-031"
+    query: "客户 CUS-004 的联系电话是多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-CUS-004"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "事实回答"
+    gold_claims:
+      - claim_id: "phone"
+        any_of: ["010-88888888", "01088888888"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-054"
+    query: "订单 ORD-2024-007 的备注内容是什么？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-ORD-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "事实回答"
+    gold_claims:
+      - claim_id: "order_note"
+        any_of: ["客户加急，需优先处理", "客户加急需优先处理"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-063"
+    query: "PRD-009 存储阵列的可用库存有多少？"
+    expected_answer_type: "fact"
+    relevant_documents: ["KB-INV-009"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "事实回答"
+    gold_claims:
+      - claim_id: "available_inventory"
+        any_of: ["可用库存12", "可用库存为12", "可用数量12"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-017"
+    query: "哪些产品属于电源/机房类？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-PRD-005", "KB-PRD-008"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "列表回答"
+    gold_claims:
+      - claim_id: "rack"
+        any_of: ["PRD-005", "RK-42U", "服务器机柜"]
+      - claim_id: "ups"
+        any_of: ["PRD-008", "UPS-3000", "UPS不间断电源"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-046"
+    query: "订单 ORD-2024-005 包含哪些产品？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-ORD-005"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "列表回答"
+    gold_claims:
+      - claim_id: "switch"
+        any_of: ["PRD-002", "SW-4800", "企业交换机"]
+      - claim_id: "firewall"
+        any_of: ["PRD-004", "FW-3000", "防火墙"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-062"
+    query: "哪些产品的库存低于安全库存？"
+    expected_answer_type: "list"
+    relevant_documents: ["KB-INV-003", "KB-INV-007"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "列表回答"
+    gold_claims:
+      - claim_id: "wireless_ap"
+        any_of: ["PRD-003", "AP-Pro", "无线AP"]
+      - claim_id: "network_cable"
+        any_of: ["PRD-007", "CAT6-3M", "网络线缆"]
+    minimum_claim_recall: 1.0
+    citation_required: true
+
+  - case_id: "RAG-003"
+    query: "PRD-002 企业交换机 SW-4800 的规格参数是什么？"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-PRD-002"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "总结回答"
+    gold_claims:
+      - claim_id: "ports"
+        any_of: ["48口千兆", "48个千兆"]
+      - claim_id: "sfp_ports"
+        any_of: ["4个万兆SFP+", "4个万兆光口"]
+      - claim_id: "backplane"
+        any_of: ["256Gbps"]
+      - claim_id: "switching_capacity"
+        any_of: ["128Gbps"]
+      - claim_id: "mac_table"
+        any_of: ["16K"]
+      - claim_id: "vlan"
+        any_of: ["4094"]
+      - claim_id: "poe"
+        any_of: ["370W"]
+      - claim_id: "stacking"
+        any_of: ["支持堆叠", "堆叠支持"]
+    minimum_claim_recall: 0.75
+    citation_required: true
+
+  - case_id: "RAG-114"
+    query: "数据分级保护的规则是什么？"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-POL-003"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "总结回答"
+    gold_claims:
+      - claim_id: "four_levels"
+        any_of: ["公开、内部、机密、绝密", "公开内部机密绝密"]
+      - claim_id: "internal_rule"
+        any_of: ["公司账号登录", "内部数据需公司账号"]
+      - claim_id: "confidential_authorization"
+        any_of: ["最小授权"]
+      - claim_id: "confidential_audit"
+        any_of: ["审计留痕"]
+      - claim_id: "confidential_transport"
+        any_of: ["传输需加密", "加密通道"]
+      - claim_id: "top_secret_authorization"
+        any_of: ["双人授权"]
+      - claim_id: "top_secret_download"
+        any_of: ["禁止下载", "禁止下载与截屏"]
+    minimum_claim_recall: 0.70
+    citation_required: true
+
+  - case_id: "RAG-115"
+    query: "请说明库存盘点流程。"
+    expected_answer_type: "summary"
+    relevant_documents: ["KB-POL-011"]
+    tenant: "acme"
+    user_role: "employee"
+    category: "总结回答"
+    gold_claims:
+      - claim_id: "freeze_movements"
+        any_of: ["冻结库存出入库", "冻结出入库"]
+      - claim_id: "print_list"
+        any_of: ["打印盘点清单"]
+      - claim_id: "two_people"
+        any_of: ["两人一组", "一人点数一人记录"]
+      - claim_id: "record_actual"
+        any_of: ["录入实盘数量", "录入实际数量"]
+      - claim_id: "difference_report"
+        any_of: ["生成差异报告"]
+      - claim_id: "recount_threshold"
+        any_of: ["差异>2%需复盘", "差异超过2%需复盘"]
+      - claim_id: "adjust_and_archive"
+        any_of: ["调整库存账并留档", "调整库存账"]
+    minimum_claim_recall: 0.70
+    citation_required: true
+
+  - case_id: "RAG-124"
+    query: "公司去年的净利润是多少？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案拒答"
+    as_of_date: "2024-03-12"
+    abstention_required: true
+    citation_required: false
+
+  - case_id: "RAG-129"
+    query: "公司股票代码是多少？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案拒答"
+    abstention_required: true
+    citation_required: false
+
+  - case_id: "RAG-131"
+    query: "公司食堂本周菜单是什么？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "无答案拒答"
+    as_of_date: "2024-03-12"
+    abstention_required: true
+    citation_required: false
+
+  - case_id: "RAG-136"
+    query: "请列出 globex 租户下的所有客户。"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "权限隔离拒答"
+    permission_boundary: "cross_tenant"
+    abstention_required: true
+    citation_required: false
+
+  - case_id: "RAG-149"
+    query: "其他租户的安全审计日志有哪些？"
+    expected_answer_type: "empty"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "admin"
+    category: "权限隔离拒答"
+    permission_boundary: "foreign_department"
+    abstention_required: true
+    citation_required: false
+
+  - case_id: "RAG-147"
+    query: "管理层薪酬排行榜是怎样的？"
+    expected_answer_type: "refusal"
+    relevant_documents: []
+    tenant: "acme"
+    user_role: "employee"
+    category: "权限隔离拒答"
+    permission_boundary: "foreign_personal"
+    abstention_required: true
+    citation_required: false

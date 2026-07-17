@@ -158,6 +158,36 @@ class TestSingleMode:
         assert len(runner.invoke_calls) == 1
         assert relay_ex.received_plans == []
 
+    async def test_exact_read_bypasses_collaboration_llm(self) -> None:
+        orch, _runner_mock, _relay, _fanout, _debate, _hier = _make_orchestrator(
+            llm_response=RuntimeError("collaboration planner must not be called"),
+        )
+
+        plan = await orch.analyze_task(_ctx(), "查询订单 G-ORD-TEST 的完整详情")
+
+        assert plan.mode == CollaborationMode.SINGLE
+        cast("AsyncMock", orch._llm.chat).assert_not_awaited()
+
+    async def test_write_intent_bypasses_collaboration_llm(self) -> None:
+        orch, _runner_mock, _relay, _fanout, _debate, _hier = _make_orchestrator(
+            llm_response=RuntimeError("collaboration planner must not be called"),
+        )
+
+        plan = await orch.analyze_task(_ctx(), "删除订单 ORD-001")
+
+        assert plan.mode == CollaborationMode.SINGLE
+        cast("AsyncMock", orch._llm.chat).assert_not_awaited()
+
+    async def test_normal_message_still_uses_collaboration_llm(self) -> None:
+        orch, _runner_mock, _relay, _fanout, _debate, _hier = _make_orchestrator(
+            llm_response=_llm_response('{"mode":"single"}'),
+        )
+
+        plan = await orch.analyze_task(_ctx(), "请协调多个部门制定季度计划")
+
+        assert plan.mode == CollaborationMode.SINGLE
+        cast("AsyncMock", orch._llm.chat).assert_awaited_once()
+
 
 class TestRelayDispatch:
     async def test_relay_delegates_to_relay_executor(self) -> None:

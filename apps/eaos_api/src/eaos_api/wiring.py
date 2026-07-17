@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from eaos.harness.evolution.approval import ApprovalGateImpl
     from eaos.harness.harness import HarnessImpl
     from eaos.harness.policy import PolicyEngineImpl
+    from eaos.harness.write_pipeline import WritePipeline
     from eaos.infra.db.postgres import PgClient
     from eaos.infra.db.redis import RedisClientImpl
     from eaos.infra.llm.router_impl import LLMRouterImpl
@@ -89,6 +90,8 @@ class AppDeps:
     text2sql_engine: Text2SQLEngineImpl
     data_connectors: dict[str, DataConnector]
     tool_registry: ToolRegistry
+    write_pipeline: WritePipeline
+    checkpointer_connection: Any
 
 
 # -- LLM adapter for guardrail (Protocol-style chat) -------------------------
@@ -378,14 +381,38 @@ async def build_deps(config: AppConfig) -> AppDeps:
     # This persists graph state (including interrupt/resume for HITL) to
     # PostgreSQL, surviving API restarts and enabling multi-worker recovery.
     # Must use Async variant because LangGraph astream() calls aget_tuple().
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
     import psycopg
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    from psycopg.rows import dict_row
 
     # Convert asyncpg URL to psycopg format: postgresql+asyncpg:// → postgresql://
     pg_dsn = config.db.url.replace("postgresql+asyncpg://", "postgresql://")
-    _checkpointer_conn = await psycopg.AsyncConnection.connect(pg_dsn, autocommit=True)
-    checkpointer = AsyncPostgresSaver(_checkpointer_conn)
+    _checkpointer_conn = await psycopg.AsyncConnection.connect(
+        pg_dsn,
+        autocommit=True,
+        row_factory=dict_row,
+    )
+    checkpoint_serde = JsonPlusSerializer(
+        allowed_msgpack_modules=(
+            ("eaos.core.context", "TenantContext"),
+            ("asyncpg.pgproto.pgproto", "UUID"),
+            ("eaos.agent.dispatcher", "AgentScope"),
+            ("eaos.agent.dispatcher", "CapabilityBoundary"),
+            ("eaos.agent.dispatcher", "AgentConfig"),
+            ("eaos.knowledge.memory.store", "MemoryScope"),
+            ("eaos.knowledge.memory.store", "MemoryType"),
+            ("eaos.knowledge.memory.store", "Memory"),
+            ("eaos.skills.spec", "SkillScope"),
+            ("eaos.skills.spec", "SkillCategory"),
+            ("eaos.skills.spec", "RiskLevel"),
+            ("eaos.skills.spec", "SkillSpec"),
+        )
+    )
+    checkpointer = AsyncPostgresSaver(
+        _checkpointer_conn,
+        serde=checkpoint_serde,
+    )
     await checkpointer.setup()  # idempotent: creates tables if missing
 
     runner = LangGraphRunnerImpl(
@@ -483,8 +510,7 @@ async def build_deps(config: AppConfig) -> AppDeps:
         tool_name="erp_create_sales_order",
         resource="orders",  # C13/Fix-2: connector expects bare table name, not "erp.orders"
         operation="create",
-        risk_level="medium",  # C13/Fix-3: medium so admin can write directly;
-                              # guard still enforces permission (non-admin blocked)
+        risk_level="high",
         description=(
             "Create a sales order in the ERP system. "
             "Arguments: customer_code, product_sku, quantity, unit_price."
@@ -492,8 +518,14 @@ async def build_deps(config: AppConfig) -> AppDeps:
         input_schema={
             "type": "object",
             "properties": {
-                "customer_code": {"type": "string", "description": "Customer code (e.g. CUS-TECH-0001)"},
-                "product_sku": {"type": "string", "description": "Product SKU (e.g. PRD-ELEC-001)"},
+                "customer_code": {
+                    "type": "string",
+                    "description": "Customer code (e.g. CUS-TECH-0001)",
+                },
+                "product_sku": {
+                    "type": "string",
+                    "description": "Product SKU (e.g. PRD-ELEC-001)",
+                },
                 "quantity": {"type": "integer", "description": "Order quantity"},
                 "unit_price": {"type": "number", "description": "Unit price"},
             },
@@ -589,10 +621,17 @@ async def build_deps(config: AppConfig) -> AppDeps:
         text2sql_engine=text2sql_engine,
         data_connectors=data_connectors,
         tool_registry=tool_registry,
+        write_pipeline=write_pipeline,
+        checkpointer_connection=_checkpointer_conn,
     )
 
 
 async def close_deps(deps: AppDeps) -> None:
-    """Graceful shutdown: dispose DB pool and Redis pool. LLM/embedder clients are lazy + GC'd."""
-    await deps.redis.close()
-    await deps.db.close()
+    """Gracefully close the checkpointer and shared connection pools."""
+    try:
+        await deps.checkpointer_connection.close()
+    finally:
+        try:
+            await deps.redis.close()
+        finally:
+            await deps.db.close()

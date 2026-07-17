@@ -1,16 +1,30 @@
 """Quick API smoke test."""
-import httpx
+
 import subprocess
-import uuid
+
+import httpx
 
 BASE = "http://localhost:8000"
 
 # Get a real agent_id from the database
 result = subprocess.run(
-    ["docker", "exec", "eaos-postgres",
-     "psql", "-U", "eaos", "-d", "eaos", "-t", "-A", "-c",
-     "SELECT id FROM agent.agents LIMIT 1"],
-    capture_output=True, text=True, timeout=10,
+    [
+        "docker",
+        "exec",
+        "eaos-postgres",
+        "psql",
+        "-U",
+        "eaos",
+        "-d",
+        "eaos",
+        "-t",
+        "-A",
+        "-c",
+        "SELECT id FROM agent.agents LIMIT 1",
+    ],
+    capture_output=True,
+    text=True,
+    timeout=10,
 )
 agent_id = result.stdout.strip()
 if not agent_id:
@@ -21,7 +35,11 @@ print(f"Using agent_id: {agent_id}")
 # Login
 r = httpx.post(
     f"{BASE}/api/auth/login",
-    json={"email": "employee@acme.com", "password": "employee"},
+    json={
+        "tenant_slug": "acme-corp",
+        "email": "employee@acme.com",
+        "password": "EaosDemo-Employee-2026!",
+    },
 )
 print(f"Login status: {r.status_code}")
 

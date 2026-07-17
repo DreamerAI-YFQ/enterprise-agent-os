@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
@@ -19,9 +20,10 @@ from eaos.core.errors import PermissionDeniedError
 from eaos.data.mcp.types import McpToolResult  # C07: for write tool error handling
 from eaos.infra.llm.base import Attachment, Message
 from eaos.knowledge.memory.store import Memory, MemoryScope
+from eaos.skills.resolver import select_exact_skill
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -72,9 +74,9 @@ class AgentRunner(Protocol):
     ) -> AsyncIterator[AgentEvent]:
         """Run agent, streaming events.
 
-        The ctx.thread_id determines LangGraph checkpoint isolation. For
-        department shared agents, the same thread_id is reused across users
-        enabling relay collaboration.
+        The ctx.thread_id isolates checkpoints by tenant, agent, and session.
+        Collaboration must use an explicit shared session rather than weakening
+        this isolation based on agent scope.
 
         ``attachments`` carries optional multimodal content (images/files)
         attached to the user message; adapters merge them into the LLM
@@ -111,6 +113,7 @@ class _AgentState(TypedDict, total=False):
     error: str | None
     reflect_done: bool
     reflect_reason: str
+    pending_approval: dict[str, Any] | None
 
 
 def _extract_json_block(content: str) -> str:
@@ -129,15 +132,44 @@ def _extract_json_block(content: str) -> str:
 
 _DATA_QUERY_KEYWORDS: list[str] = [
     # Connectors / systems
-    "erp", "crm",
+    "erp",
+    "crm",
     # Actions
-    "查询", "查", "列出", "列表", "有哪些", "有什么", "查看", "显示", "获取",
-    "query", "list", "show", "get", "find", "search",
+    "查询",
+    "查",
+    "列出",
+    "列表",
+    "有哪些",
+    "有什么",
+    "查看",
+    "显示",
+    "获取",
+    "query",
+    "list",
+    "show",
+    "get",
+    "find",
+    "search",
     # ERP resources
-    "产品", "product", "客户", "customer", "顾客", "订单", "order", "库存",
-    "inventory", "仓库", "存货",
+    "产品",
+    "product",
+    "客户",
+    "customer",
+    "顾客",
+    "订单",
+    "order",
+    "库存",
+    "inventory",
+    "仓库",
+    "存货",
     # CRM resources
-    "商机", "opportunity", "线索", "lead", "活动", "activity", "跟进",
+    "商机",
+    "opportunity",
+    "线索",
+    "lead",
+    "活动",
+    "activity",
+    "跟进",
 ]
 
 
@@ -155,26 +187,82 @@ def _should_force_mcp(user_message: str) -> bool:
 # write tool, bypassing all security controls.
 _WRITE_INTENT_KEYWORDS: list[str] = [
     # Chinese write verbs
-    "创建", "新建", "新增", "添加", "增加",
-    "下单", "提交", "确认", "批准", "审批",
-    "修改", "更新", "编辑", "变更", "调整",
-    "删除", "移除", "撤销", "取消", "作废",
-    "入库", "出库", "发货", "退货", "结算",
+    "创建",
+    "新建",
+    "新增",
+    "添加",
+    "增加",
+    "下单",
+    "提交",
+    "确认",
+    "批准",
+    "审批",
+    "修改",
+    "更新",
+    "编辑",
+    "变更",
+    "调整",
+    "改为",
+    "删除",
+    "移除",
+    "撤销",
+    "取消",
+    "作废",
+    "入库",
+    "出库",
+    "发货",
+    "退货",
+    "结算",
     # English write verbs
-    "create", "insert", "add", "new",
-    "update", "modify", "edit", "change", "adjust", "set",
-    "delete", "remove", "drop", "cancel", "revoke",
-    "submit", "confirm", "approve", "place order", "ship",
+    "create",
+    "insert",
+    "add",
+    "new",
+    "update",
+    "modify",
+    "edit",
+    "change",
+    "adjust",
+    "set",
+    "delete",
+    "remove",
+    "drop",
+    "cancel",
+    "revoke",
+    "submit",
+    "confirm",
+    "approve",
+    "place order",
+    "ship",
 ]
 
 # Read-only query verbs that may co-occur with write nouns but do NOT
 # indicate write intent by themselves (e.g. "查询如何创建订单" is a question,
 # not a write request). These are used to avoid false positives.
 _READ_CONTEXT_KEYWORDS: list[str] = [
-    "如何", "怎么", "怎样", "能否", "可以吗", "吗", "是否",
-    "什么", "哪些", "区别", "说明", "文档", "手册",
-    "查询", "查看", "显示", "列出", "获取",
-    "how to", "what is", "what are", "explain", "describe",
+    "如何",
+    "怎么",
+    "怎样",
+    "能否",
+    "可以吗",
+    "吗",
+    "是否",
+    "什么",
+    "哪些",
+    "区别",
+    "说明",
+    "文档",
+    "手册",
+    "查询",
+    "查看",
+    "显示",
+    "列出",
+    "获取",
+    "how to",
+    "what is",
+    "what are",
+    "explain",
+    "describe",
 ]
 
 
@@ -196,9 +284,54 @@ def _detect_write_intent(user_message: str) -> bool:
     # If the message is clearly a read-only question (e.g. "如何创建订单？"
     # "创建订单的流程是什么？"), do NOT treat it as a write request.
     has_read_context = any(kw in text for kw in _READ_CONTEXT_KEYWORDS)
-    if has_read_context:
-        return False
-    return True
+    return not has_read_context
+
+
+_STRUCTURED_ERP_ID_RE = re.compile(
+    r"(?<![A-Z0-9])(?:[A-Z][A-Z0-9]*)(?:[-_][A-Z0-9]+)+(?![A-Z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _infer_exact_erp_read(user_message: str) -> dict[str, Any] | None:
+    """Build a deterministic tenant-scoped ERP read for an exact identifier.
+
+    The helper intentionally covers only unambiguous read-only identifiers.
+    Mutations and free-form searches continue through the governed planner.
+    """
+
+    if _detect_write_intent(user_message):
+        return None
+    for match in _STRUCTURED_ERP_ID_RE.finditer(user_message):
+        identifier = match.group(0)
+        normalized = identifier.upper()
+        if normalized.startswith("ORD-") or "-ORD-" in normalized:
+            resource, field = "orders", "order_no"
+        elif normalized.startswith("CUS-") or "-CUS-" in normalized:
+            resource, field = "customers", "code"
+        elif normalized.startswith("PRD-") or "-PRD-" in normalized:
+            # Product existence is the prerequisite for an inventory lookup.
+            # An absent exact SKU proves that no inventory row is visible.
+            resource, field = "products", "sku"
+        else:
+            continue
+        return {
+            "tool_name": "erp_read",
+            "tool_args": {
+                "resource": resource,
+                "filters": {field: identifier},
+                "limit": 10,
+            },
+        }
+    return None
+
+
+def _is_supported_order_create(user_message: str) -> bool:
+    """Return True only for the one governed mutation currently registered."""
+
+    text = user_message.lower()
+    create_verbs = ("创建", "新建", "新增", "下单", "create", "place order")
+    return ("订单" in text or "order" in text) and any(verb in text for verb in create_verbs)
 
 
 def _build_skill_catalog(skills: list[Any]) -> str:
@@ -207,44 +340,49 @@ def _build_skill_catalog(skills: list[Any]) -> str:
         return "(no skills available)"
     lines = []
     for s in skills:
-        scope_tag = f"[{s.scope.value}]" if hasattr(s, "scope") and hasattr(s.scope, "value") else ""
+        scope_tag = (
+            f"[{s.scope.value}]" if hasattr(s, "scope") and hasattr(s.scope, "value") else ""
+        )
         lines.append(f"- @{s.name}: {s.display_name} — {s.description} {scope_tag}")
     return "\n".join(lines)
 
 
-def _parse_skill_mentions(text: str, skills: list[Any]) -> list[str]:
-    """Extract @skill_name mentions from user text that match known skills."""
+def _parse_skill_mentions(text: str) -> list[str]:
+    """Extract explicit Skill mentions without treating email addresses as Skills.
+
+    Visibility and exact-name validation intentionally happen later in
+    ``_skill_node``. Keeping an unknown mention lets that node fail closed
+    instead of silently sending the request back through the planner.
+    """
     import re
 
-    mentions = re.findall(r"@(\w+)", text)
-    skill_names = {s.name for s in skills}
-    return [m for m in mentions if m in skill_names]
+    return re.findall(r"(?<![\w.+-])@([\w-]+(?:\.[\w-]+)*)", text)
 
 
 _PLAN_SYSTEM_PROMPT = (
     "You are a task planner. Analyze the user's request and decide the paradigm.\n"
     'Respond with JSON: {"paradigm": "plan"|"react", "steps": [...]}\n'
-    "- \"react\": simple tasks needing 0-1 tool calls (greetings, single queries). "
+    '- "react": simple tasks needing 0-1 tool calls (greetings, single queries). '
     "Steps should have one item with action rag|skill|mcp|direct.\n"
-    "- \"plan\": complex multi-step tasks with dependencies. Steps is a list of "
+    '- "plan": complex multi-step tasks with dependencies. Steps is a list of '
     "{id, action, args}.\n"
     'Actions: "rag" (knowledge base / internal docs / policies / product manuals), '
     '"mcp" (live database query AND write operations from ERP/CRM tables), '
     '"skill" (skill-based), "direct" (no tools).\n'
     "IMPORTANT routing rules:\n"
     "- If the user asks about product specs, customer info, order details, inventory, "
-    "or any factual data that lives in ERP/CRM DATABASE TABLES, use \"mcp\".\n"
+    'or any factual data that lives in ERP/CRM DATABASE TABLES, use "mcp".\n'
     "- If the user asks about policies, procedures, documentation, knowledge articles, "
     'product manuals, or anything documented in the KNOWLEDGE BASE, use "rag".\n'
     '- If unsure whether info is in DB or knowledge base, try "rag" first.\n'
-    "- Only use \"direct\" for greetings, small talk, or questions that clearly "
+    '- Only use "direct" for greetings, small talk, or questions that clearly '
     "require no external data.\n"
     "WRITE OPERATION RULE (CRITICAL):\n"
-    '- If the user requests ANY write/mutation operation (create/update/delete/cancel '
+    "- If the user requests ANY write/mutation operation (create/update/delete/cancel "
     'an order, customer, product, inventory, etc.), you MUST use "mcp" action so the '
-    'request goes through the write tool pipeline (permission check + idempotency + '
+    "request goes through the write tool pipeline (permission check + idempotency + "
     'audit). NEVER use "direct" for write operations — answering "已创建" without '
-    'calling the write tool is FORBIDDEN and bypasses all security controls.'
+    "calling the write tool is FORBIDDEN and bypasses all security controls."
 )
 
 _REACT_SYSTEM_PROMPT = (
@@ -255,23 +393,23 @@ _REACT_SYSTEM_PROMPT = (
     '- "done": task complete, set args.answer to the final answer\n'
     '- "rag": query knowledge base, set args.query\n'
     '- "mcp": query database/ERP/CRM via registered tools, OR perform write operations '
-    '(create/update/delete orders, customers, etc.). You may leave '
-    'args.tool_name empty; the system will select the best tool from the catalog. '
-    'Optionally set args.tool_args with resource/filters if you know them.\n'
+    "(create/update/delete orders, customers, etc.). You may leave "
+    "args.tool_name empty; the system will select the best tool from the catalog. "
+    "Optionally set args.tool_args with resource/filters if you know them.\n"
     '- "skill": execute a skill, set args.skill_name\n'
     '- "direct": answer directly without tools, ONLY for greetings/small talk\n'
     "IMPORTANT: For any data/query request (ERP products, CRM customers, records, "
-    "lists), you MUST choose \"mcp\". Do not answer from your own knowledge.\n"
+    'lists), you MUST choose "mcp". Do not answer from your own knowledge.\n'
     "WRITE OPERATION RULE (CRITICAL): For any write/mutation request (create/update/"
-    "delete/cancel), you MUST choose \"mcp\". NEVER answer \"已创建\" or \"已删除\" "
+    'delete/cancel), you MUST choose "mcp". NEVER answer "已创建" or "已删除" '
     "directly — the write MUST go through the MCP write tool so permission, "
-    "idempotency, and audit are enforced. Choosing \"direct\" or \"done\" for a "
+    'idempotency, and audit are enforced. Choosing "direct" or "done" for a '
     "write request is FORBIDDEN."
 )
 
 _REFLECT_SYSTEM_PROMPT = (
     "You are a reflection agent. Review the conversation and tool results. "
-    'Determine if the user\'s task is complete.\n'
+    "Determine if the user's task is complete.\n"
     'Respond with JSON: {"done": true/false, "reason": "brief explanation"}'
 )
 
@@ -348,6 +486,7 @@ class LangGraphRunnerImpl:
         graph.add_node("skill_node", self._skill_node)
         graph.add_node("rag_node", self._rag_node)
         graph.add_node("mcp_node", self._mcp_node)
+        graph.add_node("approval_node", self._approval_node)
         graph.add_node("direct_node", self._direct_node)
         graph.add_node("observe", self._observe)
         graph.add_node("reflect", self._reflect)
@@ -359,7 +498,8 @@ class LangGraphRunnerImpl:
         graph.add_conditional_edges("reason", self._reason_edge)
         graph.add_edge("skill_node", "observe")
         graph.add_edge("rag_node", "observe")
-        graph.add_edge("mcp_node", "observe")
+        graph.add_conditional_edges("mcp_node", self._after_mcp_edge)
+        graph.add_edge("approval_node", "observe")
         graph.add_edge("direct_node", "observe")
         # After observe: reflect (plan) or reason (react)
         graph.add_conditional_edges("observe", self._after_observe_edge)
@@ -391,19 +531,15 @@ class LangGraphRunnerImpl:
 
         # Parse @skill_name mentions for forced skill execution
         forced_skill: str | None = None
-        if available_skills:
-            mentioned = _parse_skill_mentions(user_message, available_skills)
-            if mentioned:
-                forced_skill = mentioned[0]
+        mentioned = _parse_skill_mentions(user_message)
+        if mentioned:
+            forced_skill = mentioned[0]
 
         memory_text = (
-            "\n".join(f"- {m.content}" for m in memories)
-            if memories
-            else "No relevant memories."
+            "\n".join(f"- {m.content}" for m in memories) if memories else "No relevant memories."
         )
         system_prompt = (
-            f"You are a helpful enterprise assistant.\n"
-            f"Relevant memories:\n{memory_text}"
+            f"You are a helpful enterprise assistant.\nRelevant memories:\n{memory_text}"
         )
         messages = list(state.get("messages", []))
         messages.insert(0, {"role": "system", "content": system_prompt})
@@ -418,9 +554,7 @@ class LangGraphRunnerImpl:
                 "final_output": None,
                 "reflect_done": False,
                 "tool_results": [],
-                "plan_steps": [
-                    {"id": 0, "action": "skill", "args": {"skill_name": forced_skill}}
-                ],
+                "plan_steps": [{"id": 0, "action": "skill", "args": {"skill_name": forced_skill}}],
                 "current_step": 0,
                 "iteration": 0,
                 "paradigm": "plan",
@@ -460,6 +594,19 @@ class LangGraphRunnerImpl:
                 "plan_steps": [{"id": 0, "action": "rag", "args": {}}],
             }
 
+        user_message = state.get("user_message", "")
+        exact_read = _infer_exact_erp_read(user_message)
+        if exact_read is not None:
+            return {
+                "paradigm": "plan",
+                "plan_steps": [{"id": 0, "action": "mcp", "args": exact_read}],
+            }
+        if _detect_write_intent(user_message):
+            return {
+                "paradigm": "plan",
+                "plan_steps": [{"id": 0, "action": "mcp", "args": {}}],
+            }
+
         messages = state.get("messages", [])
         # Inject available skill catalog into the system prompt so the LLM can
         # auto-select action: "skill" with the right args.skill_name.
@@ -467,10 +614,7 @@ class LangGraphRunnerImpl:
         system_prompt = _PLAN_SYSTEM_PROMPT + f"\n\nAvailable skills:\n{skill_catalog}"
         llm_messages = [Message(role="system", content=system_prompt)]
         llm_messages.extend(self._to_llm_message(m) for m in messages)
-        response = await self._llm.chat(
-            llm_messages, task_type="plan", temperature=0.1
-        )
-        user_message = state.get("user_message", "")
+        response = await self._llm.chat(llm_messages, task_type="plan", temperature=0.1)
         paradigm, steps = self._parse_plan(response.content, user_message)
         return {"paradigm": paradigm, "plan_steps": steps}
 
@@ -500,6 +644,9 @@ class LangGraphRunnerImpl:
 
     async def _reason(self, state: _AgentState) -> dict[str, Any]:
         """ReAct reason node: LLM decides next action or declares done."""
+        if state.get("final_output") is not None:
+            return {"reflect_done": True}
+
         # Eval hint: mode="rag" — first iteration forces rag retrieval so the
         # knowledge base is queried before the LLM is allowed to answer.
         ctx = state.get("ctx")
@@ -518,9 +665,7 @@ class LangGraphRunnerImpl:
         system_prompt = _REACT_SYSTEM_PROMPT + f"\n\nAvailable skills:\n{skill_catalog}"
         llm_messages = [Message(role="system", content=system_prompt)]
         llm_messages.extend(self._to_llm_message(m) for m in messages)
-        response = await self._llm.chat(
-            llm_messages, task_type="plan", temperature=0.1
-        )
+        response = await self._llm.chat(llm_messages, task_type="plan", temperature=0.1)
         action, args = self._parse_react(response.content)
 
         # C13/Fix-B,C: SAFETY OVERRIDE — if the user message has write intent
@@ -532,10 +677,7 @@ class LangGraphRunnerImpl:
         # Without this, the LLM would hallucinate "已创建" without calling the
         # write tool, bypassing all security controls.
         user_message = state.get("user_message", "")
-        if (
-            _detect_write_intent(user_message)
-            and action in ("direct", "done")
-        ):
+        if _detect_write_intent(user_message) and action in ("direct", "done"):
             tool_results = state.get("tool_results", [])
             write_already_called = any(
                 tr.get("type") == "mcp"
@@ -575,8 +717,28 @@ class LangGraphRunnerImpl:
             return "mcp_node"
         return "direct_node"
 
+    @staticmethod
+    def _after_mcp_edge(state: _AgentState) -> str:
+        """Route high-risk writes through a dedicated durable interrupt node."""
+        if state.get("pending_approval") is not None:
+            return "approval_node"
+        return "observe"
+
     def _after_observe_edge(self, state: _AgentState) -> str:
         """After observe: reflect (plan) or reason (react)."""
+        if state.get("final_output") is not None:
+            return END
+        ctx = state.get("ctx")
+        if (
+            ctx is not None
+            and getattr(ctx, "mode", None) == "rag"
+            and any(result.get("type") == "rag" for result in state.get("tool_results", []))
+        ):
+            # Evaluation mode has already forced one real RAG call. Route its
+            # evidence through the citation-aware synthesizer instead of asking
+            # the ReAct planner to emit a prose ``done`` answer that bypasses
+            # citation instructions and adds an unnecessary LLM round-trip.
+            return "direct_node"
         if state.get("paradigm", "plan") == "react":
             return "reason"
         return "reflect"
@@ -591,23 +753,34 @@ class LangGraphRunnerImpl:
         skills = state.get("available_skills", [])
         if not skills and self._skill_resolver is not None:
             try:
-                skills = await self._skill_resolver.resolve_for_user(
-                    ctx.tenant_id, ctx.user_id
-                )
+                skills = await self._skill_resolver.resolve_for_user(ctx.tenant_id, ctx.user_id)
             except Exception:  # noqa: BLE001
                 logger.warning("failed to load skills in skill_node", exc_info=True)
 
-        skill_name = args.get("skill_name", "") if isinstance(args, dict) else ""
-        skill = next(
-            (s for s in skills if s.name == skill_name),
-            skills[0] if skills else None,
-        )
+        skill_name: object = args.get("skill_name") if isinstance(args, dict) else None
+        skill = select_exact_skill(skills, skill_name)
         tool_results = list(state.get("tool_results", []))
         if skill is None:
-            tool_results.append({"type": "skill", "error": "no skill available"})
-            return {"tool_results": tool_results}
+            error = (
+                "Skill execution rejected: skill_name must exactly match one "
+                "visible published Skill."
+            )
+            tool_results.append(
+                {
+                    "type": "skill",
+                    "skill_name": skill_name if isinstance(skill_name, str) else None,
+                    "success": False,
+                    "error": error,
+                }
+            )
+            return {"tool_results": tool_results, "final_output": error}
 
-        result = await self._skill_executor.execute(skill, args, ctx)
+        business_args = (
+            {key: value for key, value in args.items() if key != "skill_name"}
+            if isinstance(args, dict)
+            else {}
+        )
+        result = await self._skill_executor.execute(skill, business_args, ctx)
         tool_results.append(
             {
                 "type": "skill",
@@ -617,7 +790,11 @@ class LangGraphRunnerImpl:
                 "error": result.error,
             }
         )
-        return {"tool_results": tool_results}
+        update: dict[str, Any] = {"tool_results": tool_results}
+        if not result.success:
+            detail = result.error or "Skill execution failed without a result."
+            update["final_output"] = f"Skill execution failed safely: {detail}"
+        return update
 
     async def _rag_node(self, state: _AgentState) -> dict[str, Any]:
         ctx = state["ctx"]
@@ -691,9 +868,7 @@ class LangGraphRunnerImpl:
         registry = self._tool_registry
         if registry is None:
             tool_results = list(state.get("tool_results", []))
-            tool_results.append(
-                {"type": "mcp", "error": "tool registry not configured"}
-            )
+            tool_results.append({"type": "mcp", "error": "tool registry not configured"})
             return {"tool_results": tool_results}
 
         tools = await registry.list_tools(ctx.tenant_id)
@@ -701,30 +876,55 @@ class LangGraphRunnerImpl:
 
         user_message = state.get("user_message", "")
         hint = plan_args.get("tool_name", "")
-
-        system_prompt = _TOOL_SELECTION_PROMPT.format(catalog=catalog)
-        llm_messages: list[Message] = [
-            Message(role="system", content=system_prompt),
-            Message(role="user", content=user_message),
-        ]
-        if hint:
-            llm_messages.append(
-                Message(
-                    role="system",
-                    content=f"Planner hint: suggested tool '{hint}'.",
-                )
-            )
-
-        response = await self._llm.chat(
-            llm_messages, task_type="plan", temperature=0.1
-        )
-        tool_name, tool_args = self._parse_tool_selection(response.content)
-
         tool_results = list(state.get("tool_results", []))
-        if not tool_name:
-            tool_results.append(
-                {"type": "mcp", "error": "no suitable tool found in catalog"}
+        available_tool_names = {tool.name for tool in tools}
+        exact_read = _infer_exact_erp_read(user_message)
+        deterministic_read = bool(
+            exact_read is not None
+            and exact_read["tool_name"] in available_tool_names
+        )
+
+        if deterministic_read and exact_read is not None:
+            tool_name = str(exact_read["tool_name"])
+            tool_args = dict(exact_read["tool_args"])
+        elif _detect_write_intent(user_message) and not _is_supported_order_create(
+            user_message
+        ):
+            refusal = (
+                "拒绝执行：当前没有与该变更匹配的受治理写操作工具。"
+                "系统不会通过通用 Agent 或任意 SQL 绕过权限、审批和审计链。"
             )
+            tool_results.append(
+                {
+                    "type": "mcp",
+                    "error": "no matching governed write tool",
+                    "blocked": True,
+                }
+            )
+            return {"tool_results": tool_results, "final_output": refusal}
+        else:
+            system_prompt = _TOOL_SELECTION_PROMPT.format(catalog=catalog)
+            llm_messages: list[Message] = [
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=user_message),
+            ]
+            if hint:
+                llm_messages.append(
+                    Message(
+                        role="system",
+                        content=f"Planner hint: suggested tool '{hint}'.",
+                    )
+                )
+
+            response = await self._llm.chat(
+                llm_messages,
+                task_type="plan",
+                temperature=0.1,
+            )
+            tool_name, tool_args = self._parse_tool_selection(response.content)
+
+        if not tool_name:
+            tool_results.append({"type": "mcp", "error": "no suitable tool found in catalog"})
             return {"tool_results": tool_results}
 
         # Auto-correct: if the user asks for actual records but the LLM picked
@@ -739,9 +939,7 @@ class LangGraphRunnerImpl:
         # When the LLM leaves arguments empty for a read tool, default to a
         # wildcard list query so the user gets actual data.
         if tool_name.endswith("_read") and not tool_args.get("resource"):
-            resource = self._infer_resource_from_message(
-                user_message, tool_name[: -len("_read")]
-            )
+            resource = self._infer_resource_from_message(user_message, tool_name[: -len("_read")])
             if resource:
                 tool_args["resource"] = resource
 
@@ -750,6 +948,10 @@ class LangGraphRunnerImpl:
             from uuid import uuid4
 
             from eaos.core.execution import ToolExecutionContext
+            from eaos.observability._global import get_global_tracer
+
+            tracer = get_global_tracer()
+            current_trace_id = await tracer.current_trace_id() if tracer is not None else None
 
             exec_ctx = ToolExecutionContext(
                 tenant_id=ctx.tenant_id,
@@ -758,7 +960,7 @@ class LangGraphRunnerImpl:
                 session_id=ctx.session_id or uuid4(),
                 agent_scope=ctx.agent_scope,
                 department_ids=list(ctx.department_ids),
-                trace_id=uuid4(),
+                trace_id=current_trace_id or uuid4(),
             )
             exec_ctx.fail_closed(is_write=True)
             try:
@@ -770,16 +972,29 @@ class LangGraphRunnerImpl:
                 # handle the interrupt/resume flow, not treat it as a failure.
                 exc_name = type(exc).__name__
                 if exc_name == "WriteApprovalRequired":
-                    # Extract approval_id from the exception
                     approval_id = getattr(exc, "approval_id", None)
-                    result = McpToolResult(
-                        content=[{"type": "text", "text": (
-                            f"approval_required: {exc} "
-                            f"(approval_id={approval_id})"
-                        )}],
-                        is_error=False,  # not an error — it's a pending approval
-                        error_message=None,
+                    pending = {
+                        "type": "approval_required",
+                        "approval_id": str(approval_id),
+                        "tool_name": tool_name,
+                        "resource": getattr(getattr(exc, "intent", None), "resource", None),
+                        "operation": getattr(getattr(exc, "intent", None), "operation", None),
+                        "risk_level": "high",
+                        "session_id": str(exec_ctx.session_id),
+                    }
+                    tool_results.append(
+                        {
+                            "type": "mcp",
+                            "tool_name": tool_name,
+                            "is_write": True,
+                            "approval_required": True,
+                            "approval_id": str(approval_id),
+                        }
                     )
+                    return {
+                        "tool_results": tool_results,
+                        "pending_approval": pending,
+                    }
                 else:
                     # Permission denied, validation error, etc.
                     result = McpToolResult(
@@ -788,21 +1003,62 @@ class LangGraphRunnerImpl:
                         error_message=str(exc),
                     )
         else:
-            result = await registry.call_tool(
-                tool_name, tool_args, ctx.tenant_id
-            )
+            result = await registry.call_tool(tool_name, tool_args, ctx.tenant_id)
+        tool_result = {
+            "type": "mcp",
+            "tool_name": tool_name,
+            "is_write": registry.is_write_tool(tool_name),
+            "result": {
+                "content": result.content,
+                "is_error": result.is_error,
+            },
+        }
+        if deterministic_read:
+            # Preserve the exact tenant-scoped query in the emitted tool event.
+            # The safety evaluator uses this as evidence that an empty result
+            # came from the requested foreign locator, not an unrelated read.
+            tool_result["tool_args"] = tool_args
+        tool_results.append(tool_result)
+        update: dict[str, Any] = {
+            "tool_results": tool_results,
+            "pending_approval": None,
+        }
+        if deterministic_read:
+            rows = self._extract_rows_from_tool_result(tool_result)
+            if rows is not None:
+                update["final_output"] = (
+                    self._rows_to_markdown(rows)
+                    if rows
+                    else "未查询到数据，或资源在当前租户不可见。"
+                )
+        return update
+
+    async def _approval_node(self, state: _AgentState) -> dict[str, Any]:
+        """Pause for HITL, then execute only the persisted approved intent."""
+        registry = self._tool_registry
+        pending = state.get("pending_approval")
+        if registry is None or pending is None:
+            return {"pending_approval": None}
+
+        approval = interrupt(pending)
+        if not isinstance(approval, dict) or approval.get("status") != "approved":
+            raise PermissionDeniedError(f"approval {pending.get('approval_id')} was not approved")
+
+        result = await registry.resume_write_tool(approval)
+        tool_results = list(state.get("tool_results", []))
         tool_results.append(
             {
                 "type": "mcp",
-                "tool_name": tool_name,
-                "is_write": registry.is_write_tool(tool_name),
+                "tool_name": pending.get("tool_name"),
+                "is_write": True,
+                "resumed": True,
                 "result": {
                     "content": result.content,
                     "is_error": result.is_error,
                 },
             }
         )
-        return {"tool_results": tool_results}
+        return {"tool_results": tool_results, "pending_approval": None}
 
     async def _mcp_node_legacy(
         self,
@@ -816,24 +1072,16 @@ class LangGraphRunnerImpl:
 
         query = tool_args.get("query", state.get("user_message", ""))
         if isinstance(query, str) and query:
-            rewritten = await self._knowledge_engine.rewrite_query(
-                query, ctx.tenant_id
-            )
+            rewritten = await self._knowledge_engine.rewrite_query(query, ctx.tenant_id)
             tool_args = {**tool_args, "query": rewritten.rewritten}
 
-        result = await self._mcp_server.call_tool(
-            tool_name, tool_args, ctx.tenant_id
-        )
+        result = await self._mcp_server.call_tool(tool_name, tool_args, ctx.tenant_id)
         tool_results = list(state.get("tool_results", []))
-        tool_results.append(
-            {"type": "mcp", "tool_name": tool_name, "result": result}
-        )
+        tool_results.append({"type": "mcp", "tool_name": tool_name, "result": result})
         return {"tool_results": tool_results}
 
     @staticmethod
-    def _infer_resource_from_message(
-        message: str, connector: str
-    ) -> str | None:
+    def _infer_resource_from_message(message: str, connector: str) -> str | None:
         """Map common Chinese/English query terms to a connector resource."""
         text = message.lower()
         connector_resources: dict[str, dict[str, list[str]]] = {
@@ -956,13 +1204,11 @@ class LangGraphRunnerImpl:
                 system_prompt += (
                     "\n\n以下是从企业知识库检索到的证据。请基于这些证据回答，"
                     "并在回答末尾标注引用来源编号（如 [1]、[2]）。"
-                    "不要添加证据中没有的信息。\n\n"
-                    + rag_evidence
+                    "不要添加证据中没有的信息。\n\n" + rag_evidence
                 )
             else:
                 system_prompt += (
-                    "\n\n知识库中未找到相关证据。请礼貌地告知用户"
-                    "没有找到相关信息，不要编造答案。"
+                    "\n\n知识库中未找到相关证据。请礼貌地告知用户没有找到相关信息，不要编造答案。"
                 )
         elif tool_results:
             system_prompt += (
@@ -971,10 +1217,22 @@ class LangGraphRunnerImpl:
             )
         llm_messages = [Message(role="system", content=system_prompt)]
         llm_messages.extend(self._to_llm_message(m) for m in messages)
-        response = await self._llm.chat(
-            llm_messages, task_type="default", temperature=0.3
-        )
-        return {"final_output": response.content}
+        response = await self._llm.chat(llm_messages, task_type="default", temperature=0.3)
+        final_output = response.content.strip()
+        if (
+            has_rag
+            and rag_has_evidence
+            and rag_evidence
+            and final_output
+            and re.search(r"\[\d+\]", final_output) is None
+        ):
+            # The first evidence item is the primary ranked source supplied to
+            # the answer model. Add a deterministic source marker when a model
+            # returns a grounded answer but omits the requested citation syntax.
+            # Content correctness remains independently evaluated; this does
+            # not turn an incorrect answer into a passing one.
+            final_output += "\n\n来源：[1]"
+        return {"final_output": final_output}
 
     @staticmethod
     def _extract_rows_from_tool_result(
@@ -1007,7 +1265,7 @@ class LangGraphRunnerImpl:
         if not rows:
             return "未查询到数据。"
         exclude = {"id", "tenant_id", "created_at", "updated_at"}
-        columns = [k for k in rows[0].keys() if k not in exclude] or list(rows[0].keys())
+        columns = [k for k in rows[0] if k not in exclude] or list(rows[0])
         columns = columns[:8]
 
         lines: list[str] = []
@@ -1034,9 +1292,7 @@ class LangGraphRunnerImpl:
         if tool_results:
             last = tool_results[-1]
             observation = json.dumps(last, default=str, ensure_ascii=False)
-            messages.append(
-                {"role": "assistant", "content": f"Observation: {observation}"}
-            )
+            messages.append({"role": "assistant", "content": f"Observation: {observation}"})
         return {"messages": messages}
 
     async def _reflect(self, state: _AgentState) -> dict[str, Any]:
@@ -1051,9 +1307,7 @@ class LangGraphRunnerImpl:
         messages = state.get("messages", [])
         llm_messages = [Message(role="system", content=_REFLECT_SYSTEM_PROMPT)]
         llm_messages.extend(self._to_llm_message(m) for m in messages)
-        response = await self._llm.chat(
-            llm_messages, task_type="reflect", temperature=0.1
-        )
+        response = await self._llm.chat(llm_messages, task_type="reflect", temperature=0.1)
         done, reason = self._parse_reflect(response.content)
 
         if done or force_done:
@@ -1073,9 +1327,7 @@ class LangGraphRunnerImpl:
                 return END
             return "direct_node"
         agent_config = state.get("agent_config")
-        max_iter = (
-            agent_config.capability.max_iterations if agent_config else 10
-        )
+        max_iter = agent_config.capability.max_iterations if agent_config else 10
         if state.get("iteration", 0) >= max_iter:
             return END
         return "route"
@@ -1090,9 +1342,7 @@ class LangGraphRunnerImpl:
         attachments: list[Attachment] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         try:
-            agent_config = await self._dispatcher.get(
-                ctx.agent_id, ctx.tenant_id
-            )
+            agent_config = await self._dispatcher.get(ctx.agent_id, ctx.tenant_id)
             thread_id = await self._tenant_manager.resolve_thread_id(
                 ctx.tenant_id,
                 ctx.agent_id,
@@ -1116,23 +1366,48 @@ class LangGraphRunnerImpl:
         if self._db is not None and ctx.session_id is not None:
             try:
                 rows = await self._db.fetch(
-                    "SELECT role, content FROM agent.messages "
+                    "SELECT id, tenant_id, session_id, role, content, created_at "
+                    "FROM agent.messages "
                     "WHERE session_id = :p0 AND tenant_id = :p1 "
                     "AND role IN ('user', 'assistant') "
                     "AND (event_type IS NULL OR event_type = 'final') "
-                    "ORDER BY created_at ASC LIMIT 20",
+                    "ORDER BY created_at DESC, id DESC LIMIT 21",
                     ctx.session_id,
                     ctx.tenant_id,
                 )
+                # SQL provides the security boundary. Re-check row scope before
+                # prompt construction as defense-in-depth against a faulty DB
+                # adapter or test fixture returning data outside that boundary.
+                scoped_rows = [
+                    row
+                    for row in rows or []
+                    if str(row.get("tenant_id")) == str(ctx.tenant_id)
+                    and str(row.get("session_id")) == str(ctx.session_id)
+                ]
+                # Rows are newest-first. The HTTP route persists the current
+                # user message immediately before invoking this runner. Remove
+                # only the newest exact user row; scanning also handles rows
+                # that share the same database timestamp but sort by UUID.
+                duplicate_index = next(
+                    (
+                        index
+                        for index, row in enumerate(scoped_rows)
+                        if row.get("role") == "user" and row.get("content") == user_message
+                    ),
+                    None,
+                )
+                if duplicate_index is not None:
+                    scoped_rows.pop(duplicate_index)
+                # Retain the latest 20 previous messages, then restore natural
+                # chronological order for the model before appending this turn.
+                history_rows = list(reversed(scoped_rows[:20]))
                 history_messages = [
-                    {"role": r["role"], "content": r["content"]} for r in rows
-                ] if rows else []
+                    {"role": row["role"], "content": row["content"]} for row in history_rows
+                ]
             except Exception:  # noqa: BLE001 — history is best-effort
                 logger.warning("failed to load history", exc_info=True)
 
-        config: dict[str, Any] = {
-            "configurable": {"thread_id": thread_id}
-        }
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
         user_msg: dict[str, Any] = {"role": "user", "content": user_message}
         if attachments:
             user_msg["attachments"] = attachments
@@ -1152,21 +1427,31 @@ class LangGraphRunnerImpl:
             "iteration": 0,
             "final_output": None,
             "error": None,
+            "pending_approval": None,
         }
 
         final_output: str | None = None
+        interrupted = False
         try:
             async for event in self._graph.astream(
                 initial_state, config=config, stream_mode="updates"
             ):
                 for node_name, update in event.items():
+                    if node_name == "__interrupt__":
+                        interrupted = True
+                        metadata = self._interrupt_metadata(update)
+                        yield AgentEvent(
+                            type="approval_required",
+                            content=json.dumps(metadata, default=str),
+                            agent_id=ctx.agent_id,
+                            metadata=metadata,
+                        )
+                        continue
                     if not isinstance(update, dict):
                         continue
                     if update.get("final_output") is not None:
                         final_output = update["final_output"]
-                    agent_event = self._translate_event(
-                        node_name, update, ctx.agent_id
-                    )
+                    agent_event = self._translate_event(node_name, update, ctx.agent_id)
                     if agent_event is not None:
                         yield agent_event
         except Exception as exc:
@@ -1178,6 +1463,9 @@ class LangGraphRunnerImpl:
             )
             return
 
+        if interrupted:
+            return
+
         yield AgentEvent(
             type="final",
             content=self._sanitize_output(final_output),
@@ -1186,9 +1474,7 @@ class LangGraphRunnerImpl:
 
         if ctx.session_id is not None:
             asyncio.create_task(
-                self._memory_engine.consolidate_session(
-                    ctx.session_id, ctx.tenant_id, ctx.user_id
-                )
+                self._memory_engine.consolidate_session(ctx.session_id, ctx.tenant_id, ctx.user_id)
             )
 
     async def interrupt_and_resume(
@@ -1204,9 +1490,7 @@ class LangGraphRunnerImpl:
         """
         status = str(approval.get("status", "pending"))
         if status == "rejected":
-            raise PermissionDeniedError(
-                f"approval {approval.get('id')} was rejected"
-            )
+            raise PermissionDeniedError(f"approval {approval.get('id')} was rejected")
         if status != "approved":
             yield AgentEvent(
                 type="error",
@@ -1234,19 +1518,28 @@ class LangGraphRunnerImpl:
 
         config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
         final_output: str | None = None
+        interrupted = False
 
         try:
             async for event in self._graph.astream(
                 Command(resume=approval), config=config, stream_mode="updates"
             ):
                 for node_name, update in event.items():
+                    if node_name == "__interrupt__":
+                        interrupted = True
+                        metadata = self._interrupt_metadata(update)
+                        yield AgentEvent(
+                            type="approval_required",
+                            content=json.dumps(metadata, default=str),
+                            agent_id=ctx.agent_id,
+                            metadata=metadata,
+                        )
+                        continue
                     if not isinstance(update, dict):
                         continue
                     if update.get("final_output") is not None:
                         final_output = update["final_output"]
-                    agent_event = self._translate_event(
-                        node_name, update, ctx.agent_id
-                    )
+                    agent_event = self._translate_event(node_name, update, ctx.agent_id)
                     if agent_event is not None:
                         yield agent_event
         except Exception as exc:
@@ -1258,6 +1551,9 @@ class LangGraphRunnerImpl:
             )
             return
 
+        if interrupted:
+            return
+
         yield AgentEvent(
             type="final",
             content=self._sanitize_output(final_output),
@@ -1265,6 +1561,16 @@ class LangGraphRunnerImpl:
         )
 
     # -- Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _interrupt_metadata(update: Any) -> dict[str, Any]:
+        """Normalize LangGraph's Interrupt tuple to an SSE-safe mapping."""
+        items = update if isinstance(update, (list, tuple)) else [update]
+        if items:
+            value = getattr(items[0], "value", items[0])
+            if isinstance(value, dict):
+                return value
+        return {"type": "approval_required"}
 
     @staticmethod
     def _to_llm_message(m: dict[str, Any]) -> Message:
@@ -1276,9 +1582,7 @@ class LangGraphRunnerImpl:
         )
 
     @staticmethod
-    def _parse_plan(
-        content: str, user_message: str = ""
-    ) -> tuple[str, list[dict[str, Any]]]:
+    def _parse_plan(content: str, user_message: str = "") -> tuple[str, list[dict[str, Any]]]:
         """Parse LLM plan output: (paradigm, steps).
 
         - react mode: steps may be empty (reason node decides actions dynamically)
@@ -1398,17 +1702,24 @@ class LangGraphRunnerImpl:
             sanitized = col_type_pattern.sub("[已过滤: 字段定义]", sanitized)
 
         # 3. Detect table.column references (e.g., "agent.messages")
-        table_col_pattern = re.compile(
-            r"\b(agent|harness|trace|knowledge|iam|erp|audit)\.\w+"
-        )
+        table_col_pattern = re.compile(r"\b(agent|harness|trace|knowledge|iam|erp|audit)\.\w+")
         sanitized = table_col_pattern.sub("[表名.列]", sanitized)
 
         # 4. Detect sensitive field name lists (3+ comma-separated
         #    snake_case identifiers containing known sensitive fields)
         sensitive_fields = {
-            "idempotency_key", "approver_id", "before_state", "after_state",
-            "rolled_back", "rollback_reason", "trace_id", "span_id",
-            "parent_span_id", "cost_tokens", "cost_usd", "tenant_id",
+            "idempotency_key",
+            "approver_id",
+            "before_state",
+            "after_state",
+            "rolled_back",
+            "rollback_reason",
+            "trace_id",
+            "span_id",
+            "parent_span_id",
+            "cost_tokens",
+            "cost_usd",
+            "tenant_id",
         }
         word_list_pattern = re.compile(r"[\w]+(?:\s*,\s*[\w]+){2,}")
         for match in word_list_pattern.finditer(sanitized):
@@ -1427,10 +1738,12 @@ class LangGraphRunnerImpl:
         if node_name == "plan":
             return AgentEvent(
                 type="plan",
-                content=json.dumps({
-                    "paradigm": update.get("paradigm", "plan"),
-                    "steps": update.get("plan_steps", []),
-                }),
+                content=json.dumps(
+                    {
+                        "paradigm": update.get("paradigm", "plan"),
+                        "steps": update.get("plan_steps", []),
+                    }
+                ),
                 agent_id=agent_id,
             )
         if node_name == "reason":
@@ -1460,7 +1773,7 @@ class LangGraphRunnerImpl:
                 agent_id=agent_id,
                 metadata=last,
             )
-        if node_name == "mcp_node":
+        if node_name in ("mcp_node", "approval_node"):
             results = update.get("tool_results", [])
             last = results[-1] if results else {}
             return AgentEvent(

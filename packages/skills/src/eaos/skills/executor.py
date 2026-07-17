@@ -7,7 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from eaos.infra.llm.base import Message
-from eaos.skills.spec import SkillResult, SkillSpec
+from eaos.skills.spec import RiskLevel, SkillResult, SkillSpec
 
 if TYPE_CHECKING:
     from eaos.agent.runtime.sandbox import CodeSandbox
@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from eaos.data.mcp.registry import ToolRegistry
     from eaos.infra.llm.router import LLMRouter
     from eaos.skills.quality import SkillQualityMonitor
+
+
+_CONTROL_INPUT_FIELDS = frozenset({"skill_name"})
 
 
 class SkillExecutor(Protocol):
@@ -60,13 +63,18 @@ class SkillExecutorImpl:
         input: dict[str, Any],
         ctx: TenantContext,
     ) -> SkillResult:
-        # Guardrail hook (Phase 3 no-op): production skills with confirm_required
-        # would interrupt for human approval; here we proceed and tag metadata.
-        # HITL for write tools is handled inside WritePipeline (T3), not here.
-        needs_confirmation = (
-            skill.requires_guardrail
-            and skill.guardrail is not None
-            and skill.guardrail.confirm_required
+        # Skill selection fields belong to orchestration, never to business
+        # tools, sandbox code, or the LLM payload.
+        business_input = {
+            key: value for key, value in input.items() if key not in _CONTROL_INPUT_FIELDS
+        }
+
+        # Skills do not yet have a trusted graph interrupt/resume contract of
+        # their own. Any explicit confirmation requirement or HIGH risk must
+        # fail closed. Write-bound skills are also rejected below instead of
+        # entering ToolRegistry.call_tool's ungoverned read signature.
+        needs_confirmation = skill.risk_level == RiskLevel.HIGH or (
+            skill.guardrail is not None and skill.guardrail.confirm_required
         )
 
         start = time.perf_counter()
@@ -74,17 +82,38 @@ class SkillExecutorImpl:
         output = ""
         cost_tokens = 0
         error: str | None = None
-        metadata: dict[str, Any] = (
-            {"needs_confirmation": True} if needs_confirmation else {}
-        )
+        metadata: dict[str, Any] = {"needs_confirmation": True} if needs_confirmation else {}
 
         try:
-            if "code_execution" in skill.tools and self._sandbox is not None:
-                output, cost_tokens = await self._run_in_sandbox(skill, input, ctx)
-            elif skill.tool_bindings and self._tool_registry is not None:
-                output, cost_tokens = await self._run_tool_bindings(skill, input, ctx)
+            if skill.requires_guardrail and skill.guardrail is None:
+                raise PermissionError(
+                    "production skill is missing its mandatory guardrail configuration"
+                )
+            if needs_confirmation:
+                raise PermissionError(
+                    "high-risk or confirmation-required skill needs HITL; "
+                    "governed skill resume is not configured"
+                )
+            if "code_execution" in skill.tools:
+                if self._sandbox is None:
+                    raise RuntimeError("code_execution skill requires a configured sandbox")
+                output, cost_tokens = await self._run_in_sandbox(skill, business_input, ctx)
+            elif skill.tool_bindings:
+                if self._tool_registry is None:
+                    raise RuntimeError("tool-bound skill requires a configured ToolRegistry")
+                available_tools = await self._preflight_tool_bindings(skill, ctx)
+                output, cost_tokens = await self._run_tool_bindings(
+                    skill,
+                    business_input,
+                    ctx,
+                    available_tools,
+                )
+            elif [name for name in skill.tools if name != "code_execution"]:
+                raise RuntimeError(
+                    "skill declares tool dependencies but has no executable tool bindings"
+                )
             else:
-                output, cost_tokens = await self._run_via_llm(skill, input)
+                output, cost_tokens = await self._run_via_llm(skill, business_input)
             success = True
         except Exception as exc:  # noqa: BLE001 — capture any sandbox/LLM/tool failure.
             error = str(exc)
@@ -126,6 +155,7 @@ class SkillExecutorImpl:
         skill: SkillSpec,
         input: dict[str, Any],
         ctx: TenantContext,
+        available_tools: set[str],
     ) -> tuple[str, int]:
         """Execute tool bindings sequentially via the ToolRegistry.
 
@@ -138,6 +168,20 @@ class SkillExecutorImpl:
         assert self._tool_registry is not None  # narrowed by caller
         results: list[dict[str, Any]] = []
         for binding in skill.tool_bindings:
+            binding_required = binding.required or binding.tool_name in skill.tools
+            if binding.tool_name not in available_tools:
+                if binding_required:
+                    raise RuntimeError(
+                        f"required tool dependency is unavailable: {binding.tool_name}"
+                    )
+                results.append(
+                    {
+                        "tool": binding.tool_name,
+                        "skipped": True,
+                        "reason": "optional tool unavailable",
+                    }
+                )
+                continue
             tool_args: dict[str, Any] = {}
             for skill_param, tool_param in binding.param_mapping.items():
                 if skill_param in input:
@@ -150,11 +194,62 @@ class SkillExecutorImpl:
                 binding.tool_name, tool_args, ctx.tenant_id
             )
             if result.is_error:
-                raise RuntimeError(
-                    f"tool '{binding.tool_name}' failed: {result.error_message or 'unknown'}"
+                message = result.error_message or "unknown"
+                if binding_required:
+                    raise RuntimeError(f"tool '{binding.tool_name}' failed: {message}")
+                results.append(
+                    {
+                        "tool": binding.tool_name,
+                        "skipped": True,
+                        "reason": f"optional tool failed: {message}",
+                    }
                 )
+                continue
             results.append({"tool": binding.tool_name, "content": result.content})
         return json.dumps(results, default=str, ensure_ascii=False), 0
+
+    async def _preflight_tool_bindings(
+        self,
+        skill: SkillSpec,
+        ctx: TenantContext,
+    ) -> set[str]:
+        """Validate all required dependencies before executing any binding."""
+        assert self._tool_registry is not None
+        catalog = await self._tool_registry.list_tools(ctx.tenant_id)
+        available = {tool.name for tool in catalog}
+
+        if any(binding.required and not binding.tool_name for binding in skill.tool_bindings):
+            raise RuntimeError("required tool binding has an empty tool name")
+
+        bindings_by_name = {
+            binding.tool_name: binding for binding in skill.tool_bindings if binding.tool_name
+        }
+        required_names = {
+            binding.tool_name
+            for binding in skill.tool_bindings
+            if binding.required and binding.tool_name
+        }
+        required_names.update(name for name in skill.tools if name != "code_execution")
+        missing_bindings = sorted(name for name in required_names if name not in bindings_by_name)
+        if missing_bindings:
+            raise RuntimeError(
+                "required tool dependencies have no binding: " + ", ".join(missing_bindings)
+            )
+        missing_tools = sorted(name for name in required_names if name not in available)
+        if missing_tools:
+            raise RuntimeError(
+                "required tool dependencies are unavailable: " + ", ".join(missing_tools)
+            )
+
+        write_tools = sorted(
+            name for name in bindings_by_name if self._tool_registry.is_write_tool(name)
+        )
+        if write_tools:
+            raise PermissionError(
+                "write-bound skill requires governed Skill HITL integration: "
+                + ", ".join(write_tools)
+            )
+        return available
 
     async def _run_via_llm(
         self,
@@ -168,4 +263,3 @@ class SkillExecutorImpl:
         ]
         response = await self._llm.chat(messages, temperature=0.2, task_type="skill")
         return response.content, response.total_tokens
-

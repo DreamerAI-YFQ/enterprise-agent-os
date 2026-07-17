@@ -20,7 +20,7 @@ from eaos.core.config import AppConfig
 from eaos.gateway.api.app import create_app
 from httpx import ASGITransport, AsyncClient
 
-SECRET = "f0-t15-contract-review-secret!"
+SECRET = "f0-t15-contract-review-secret-at-least-32-bytes"
 TID = UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_ID = UUID("00000000-0000-0000-0000-000000000010")
 EMP_ID = UUID("00000000-0000-0000-0000-000000000020")
@@ -45,8 +45,19 @@ def _mock_db(
     val: Any = 0,
 ) -> Any:
     db: Any = AsyncMock()
+    vars(db)["_eaos_validate_identity"] = True
     db.fetch = AsyncMock(return_value=fetch_rows or [])
-    db.fetch_one = AsyncMock(return_value=single_row)
+
+    async def fetch_one(sql: str, *params: Any) -> dict[str, Any] | None:
+        if "FROM iam.users u" in sql:
+            return {
+                "role": "admin" if params[0] == ADMIN_ID else "employee",
+                "status": "active",
+                "tenant_status": "active",
+            }
+        return single_row
+
+    db.fetch_one = AsyncMock(side_effect=fetch_one)
     db.fetch_val = AsyncMock(return_value=val)
     db.execute = AsyncMock(return_value=None)
     return db
@@ -105,9 +116,7 @@ class TestOpenApiSpec:
 
     async def test_openapi_json_accessible(self) -> None:
         app = create_app(_config())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/openapi.json")
         assert resp.status_code == 200
         spec = resp.json()
@@ -116,9 +125,7 @@ class TestOpenApiSpec:
 
     async def test_expected_paths_present(self) -> None:
         app = create_app(_config())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/openapi.json")
         spec = resp.json()
         actual_paths = set(spec["paths"].keys())
@@ -128,14 +135,10 @@ class TestOpenApiSpec:
     async def test_openapi_has_at_least_50_paths(self) -> None:
         """The plan targets 57 endpoints; we should have at least 50 paths."""
         app = create_app(_config())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/openapi.json")
         spec = resp.json()
-        assert len(spec["paths"]) >= 50, (
-            f"Expected >=50 paths, got {len(spec['paths'])}"
-        )
+        assert len(spec["paths"]) >= 50, f"Expected >=50 paths, got {len(spec['paths'])}"
 
 
 # ============================================================
@@ -149,9 +152,7 @@ class TestUnifiedErrorFormat:
     async def test_auth_middleware_401_has_code(self) -> None:
         """Auth middleware errors include 'code': 'unauthorized'."""
         app = create_app(_config())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/me")
         assert resp.status_code == 401
         data = resp.json()
@@ -162,9 +163,7 @@ class TestUnifiedErrorFormat:
         """Route-level 403 (forbidden) includes 'code': 'forbidden'."""
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/metrics",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -178,9 +177,7 @@ class TestUnifiedErrorFormat:
         """Route-level 404 (not found) includes 'code': 'not_found'."""
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 f"/admin/users/{uuid4()}",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -194,12 +191,14 @@ class TestUnifiedErrorFormat:
         """Route-level 409 (conflict) includes 'code': 'conflict'."""
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"id": uuid4()})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/admin/users",
-                json={"email": "dup@test.com", "name": "Dup"},
+                json={
+                    "email": "dup@test.com",
+                    "name": "Dup",
+                    "password": "initial-password",
+                },
                 headers={"Authorization": f"Bearer {_admin_token()}"},
             )
         assert resp.status_code == 409
@@ -211,9 +210,7 @@ class TestUnifiedErrorFormat:
         """Pydantic validation errors include 'code': 'validation_error'."""
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Missing required 'email' field → 422
             resp = await client.post(
                 "/admin/users",
@@ -237,9 +234,7 @@ class TestCorsHeaders:
     async def test_cors_allow_origin(self) -> None:
         """CORS allows cross-origin requests from the frontend dev server."""
         app = create_app(_config())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.options(
                 "/health",
                 headers={

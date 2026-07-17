@@ -1,7 +1,7 @@
 """Authentication API — login, refresh, logout.
 
-``POST /auth/login`` looks up a user by email in ``iam.users`` and issues a
-JWT (HS256). ``POST /auth/refresh`` re-issues a token from the current
+``POST /auth/login`` verifies a user's local password and issues a JWT
+(HS256). ``POST /auth/refresh`` re-issues a token from the current
 Principal. ``POST /auth/logout`` is a stateless no-op (clients drop the
 token).
 
@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from eaos.core.auth import Principal, create_jwt_token  # noqa: TC002
+from eaos.core.auth import Principal, create_jwt_token, verify_password  # noqa: TC002
 from eaos.gateway.api.deps import get_principal
 from fastapi import APIRouter, Depends, HTTPException, Request  # noqa: TC002
-from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from eaos.infra.db.base import DbClient
@@ -25,9 +26,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
-    """Login request body — email-based (prototype: no password)."""
+    """Local login credentials."""
 
-    email: str
+    tenant_slug: str = Field(min_length=1, max_length=50)
+    email: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class TokenResponse(BaseModel):
@@ -40,19 +43,28 @@ class TokenResponse(BaseModel):
 
 @router.post("/login", response_model=TokenResponse, status_code=200)
 async def login(body: LoginRequest, request: Request) -> TokenResponse:
-    """Authenticate by email and issue a JWT.
+    """Authenticate by email/password and issue a JWT.
 
-    Looks up ``iam.users`` by email; issues a token if the user is active.
+    Unknown accounts, wrong passwords, and unusable stored hashes intentionally
+    share the same response. Account status is disclosed only after valid
+    credentials have been supplied.
     """
     db: DbClient = request.app.state.db
     secret: str = request.app.state.config.secret_key
 
     row = await db.fetch_one(
-        "SELECT id, tenant_id, role, name, email, status "
-        "FROM iam.users WHERE email = :p0",
+        "SELECT u.id, u.tenant_id, u.role, u.name, u.email, u.status, "
+        "u.password_hash "
+        "FROM iam.users u "
+        "JOIN iam.tenants t ON t.id = u.tenant_id "
+        "WHERE t.slug = :p0 AND t.status = 'active' AND u.email = :p1",
+        body.tenant_slug,
         body.email,
     )
-    if row is None:
+    stored_hash = row.get("password_hash") if row is not None else None
+    usable_hash = stored_hash if isinstance(stored_hash, str) else ""
+    credentials_valid = await run_in_threadpool(verify_password, body.password, usable_hash)
+    if row is None or not credentials_valid:
         raise HTTPException(status_code=401, detail="invalid credentials")
     if row.get("status") != "active":
         raise HTTPException(status_code=403, detail="user account is not active")
@@ -81,9 +93,7 @@ async def refresh(
 ) -> TokenResponse:
     """Issue a new JWT from the current valid token."""
     secret: str = request.app.state.config.secret_key
-    token = create_jwt_token(
-        secret, principal.user_id, principal.tenant_id, principal.role
-    )
+    token = create_jwt_token(secret, principal.user_id, principal.tenant_id, principal.role)
     return TokenResponse(access_token=token)
 
 

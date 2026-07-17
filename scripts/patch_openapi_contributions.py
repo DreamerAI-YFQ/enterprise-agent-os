@@ -35,8 +35,13 @@ def _contribution_out_schema() -> dict:
             "metadata": {"type": "object", "additionalProperties": True},
         },
         "required": [
-            "id", "tenant_id", "submitter_id", "source_type", "title",
-            "content", "status",
+            "id",
+            "tenant_id",
+            "submitter_id",
+            "source_type",
+            "title",
+            "content",
+            "status",
         ],
     }
 
@@ -79,9 +84,7 @@ def _validation_error_response() -> dict:
     return {
         "description": "Validation Error",
         "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
-            }
+            "application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}
         },
     }
 
@@ -89,11 +92,7 @@ def _validation_error_response() -> dict:
 def _json_response(schema_ref: str = "#/components/schemas/ContributionOut") -> dict:
     return {
         "description": "Successful Response",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": schema_ref}
-            }
-        },
+        "content": {"application/json": {"schema": {"$ref": schema_ref}}},
     }
 
 
@@ -134,7 +133,9 @@ def build_paths() -> dict:
             "post": {
                 "tags": ["contributions"],
                 "summary": "Submit Contribution",
-                "description": "Submit a knowledge contribution for admin review (employee + admin).",
+                "description": (
+                    "Submit a knowledge contribution for admin review (employee + admin)."
+                ),
                 "operationId": "submit_contribution_knowledge_contributions_post",
                 "requestBody": {
                     "required": True,
@@ -215,7 +216,9 @@ def build_paths() -> dict:
                 "tags": ["contributions"],
                 "summary": "Review Contribution",
                 "description": "Approve or reject a contribution (admin only).",
-                "operationId": "review_contribution_admin_contributions_{contribution_id}_review_post",
+                "operationId": (
+                    "review_contribution_admin_contributions_{contribution_id}_review_post"
+                ),
                 "parameters": [
                     {
                         "name": "contribution_id",

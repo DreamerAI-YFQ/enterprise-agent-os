@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4  # noqa: TC003 — Pydantic needs UUID at runtime
+from uuid import UUID  # noqa: TC003 — Pydantic needs UUID at runtime
 
 from eaos.core.auth import Principal  # noqa: TC002
 from eaos.gateway.api.deps import get_db, get_memory_engine, get_principal
@@ -140,9 +140,7 @@ async def list_memories(
 
     # List path: build visibility query
     if scope == "personal":
-        where = (
-            "WHERE tenant_id = :p0 AND scope = 'personal' AND owner_id = :p1"
-        )
+        where = "WHERE tenant_id = :p0 AND scope = 'personal' AND owner_id = :p1"
         rows = await db.fetch(
             f"SELECT id, tenant_id, scope, owner_id, memory_type, content, "
             f"confidence, source, created_at, last_accessed, access_count "
@@ -249,8 +247,7 @@ async def delete_memory(
     """Delete a memory. Owner can delete own; admin can delete any."""
     if principal.role == "admin":
         row = await db.fetch_one(
-            "SELECT id FROM knowledge.org_memories "
-            "WHERE id = :p0 AND tenant_id = :p1",
+            "SELECT id FROM knowledge.org_memories WHERE id = :p0 AND tenant_id = :p1",
             memory_id,
             principal.tenant_id,
         )
@@ -418,8 +415,7 @@ async def promote_memory(
         new_owner_id = UUID(body.new_owner_id)
 
     row = await db.fetch_one(
-        "SELECT id FROM knowledge.org_memories "
-        "WHERE id = :p0 AND tenant_id = :p1",
+        "SELECT id FROM knowledge.org_memories WHERE id = :p0 AND tenant_id = :p1",
         memory_id,
         principal.tenant_id,
     )
@@ -483,7 +479,7 @@ async def batch_promote_memories(
     if not body.memory_ids:
         return {"promoted": 0}
 
-    placeholders = ", ".join(f":p{i+3}" for i in range(len(body.memory_ids)))
+    placeholders = ", ".join(f":p{i + 3}" for i in range(len(body.memory_ids)))
     await db.execute(
         f"UPDATE knowledge.org_memories "
         f"SET scope = :p0, owner_id = :p1 "

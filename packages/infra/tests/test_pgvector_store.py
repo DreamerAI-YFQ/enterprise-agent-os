@@ -39,9 +39,7 @@ class TestTableWhitelist:
     async def test_search_rejects_injection_attempt(self) -> None:
         store, _ = _make_store()
         with pytest.raises(DataError):
-            await store.search(
-                [0.1], uuid4(), "knowledge.chunks; DROP TABLE knowledge.chunks"
-            )
+            await store.search([0.1], uuid4(), "knowledge.chunks; DROP TABLE knowledge.chunks")
 
     async def test_insert_rejects_unknown_table(self) -> None:
         store, _ = _make_store()
@@ -100,27 +98,65 @@ class TestSearch:
 
     async def test_search_handles_null_metadata(self) -> None:
         store, db = _make_store()
-        db.tenant_scoped_fetch.return_value = [
-            {"id": uuid4(), "score": 0.5}
-        ]
+        db.tenant_scoped_fetch.return_value = [{"id": uuid4(), "score": 0.5}]
         results = await store.search([0.1], uuid4(), "knowledge.chunks")
         assert results[0].metadata == {}
 
     async def test_search_applies_filter(self) -> None:
         store, db = _make_store()
         db.tenant_scoped_fetch.return_value = []
-        await store.search(
-            [0.1], uuid4(), "knowledge.chunks", filter={"source": "doc1"}
-        )
+        await store.search([0.1], uuid4(), "knowledge.chunks", filter={"source": "doc1"})
         sql = db.tenant_scoped_fetch.call_args.args[0]
         assert "AND source = :p1" in sql
 
     async def test_search_rejects_invalid_filter_key(self) -> None:
         store, _ = _make_store()
         with pytest.raises(DataError, match="invalid filter key"):
-            await store.search(
-                [0.1], uuid4(), "knowledge.chunks", filter={"bad key!": "v"}
-            )
+            await store.search([0.1], uuid4(), "knowledge.chunks", filter={"bad key!": "v"})
+
+    async def test_search_applies_personal_department_enterprise_visibility(self) -> None:
+        store, db = _make_store()
+        db.tenant_scoped_fetch.return_value = []
+        user_id = uuid4()
+        department_ids = [uuid4(), uuid4()]
+
+        await store.search(
+            [0.1],
+            uuid4(),
+            "knowledge.chunks",
+            top_k=7,
+            visibility_user_id=user_id,
+            visibility_department_ids=department_ids,
+        )
+
+        call = db.tenant_scoped_fetch.call_args
+        sql = call.args[0]
+        params = call.args[2:]
+        assert "scope = 'enterprise'" in sql
+        assert "scope = 'personal' AND owner_id = :p1" in sql
+        assert "scope = 'department' AND owner_id IN (:p2, :p3)" in sql
+        assert params == (str([0.1]), user_id, *department_ids, 7)
+        assert "LIMIT :p4" in sql
+
+    async def test_visibility_indices_remain_correct_with_column_filter(self) -> None:
+        store, db = _make_store()
+        db.tenant_scoped_fetch.return_value = []
+        user_id = uuid4()
+
+        await store.search(
+            [0.1],
+            uuid4(),
+            "knowledge.chunks",
+            filter={"source": "handbook"},
+            visibility_user_id=user_id,
+        )
+
+        call = db.tenant_scoped_fetch.call_args
+        sql = call.args[0]
+        assert "owner_id = :p1" in sql
+        assert "source = :p2" in sql
+        assert "LIMIT :p3" in sql
+        assert call.args[2:] == (str([0.1]), user_id, "handbook", 5)
 
 
 class TestInsert:

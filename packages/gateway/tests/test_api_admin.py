@@ -259,7 +259,7 @@ class TestApprovals:
         tid = uuid4()
         app = create_app(config)
         gate = AsyncMock()
-        gate.list_pending.return_value = [
+        gate.list_all.return_value = [
             ApprovalRequest(
                 id=uuid4(),
                 tenant_id=tid,
@@ -274,6 +274,7 @@ class TestApprovals:
                 created_at=datetime.now(UTC),
             )
         ]
+        gate.count.return_value = 1
         app.state.approval_gate = gate
         token = _token(config, tenant_id=tid)
         async with AsyncClient(
@@ -284,8 +285,18 @@ class TestApprovals:
             )
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["status"] == "pending"
+        assert data["total"] == 1
+        assert data["limit"] == 50
+        assert data["offset"] == 0
+        assert len(data["items"]) == 1
+        assert data["items"][0]["status"] == "pending"
+        gate.list_all.assert_awaited_once_with(
+            tid,
+            status=None,
+            limit=50,
+            offset=0,
+        )
+        gate.count.assert_awaited_once_with(tid, status=None)
 
     async def test_approve(self) -> None:
         config = _config()
@@ -404,9 +415,13 @@ class TestSpans:
 
 
 class TestProtocolStubs:
-    async def test_audit_logs_returns_501(self) -> None:
+    async def test_audit_logs_returns_empty_page(self) -> None:
         config = _config()
         app = create_app(config)
+        db = AsyncMock()
+        db.fetch_one.return_value = {"cnt": 0}
+        db.fetch.return_value = []
+        app.state.db = db
         token = _token(config)
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -414,7 +429,13 @@ class TestProtocolStubs:
             response = await client.get(
                 "/admin/audit-logs", headers={"Authorization": f"Bearer {token}"}
             )
-        assert response.status_code == 501
+        assert response.status_code == 200
+        assert response.json() == {
+            "items": [],
+            "total": 0,
+            "limit": 50,
+            "offset": 0,
+        }
 
     async def test_quota_update_returns_501(self) -> None:
         config = _config()

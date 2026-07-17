@@ -1,0 +1,176 @@
+ledger_version: "1.0.0"
+core_dataset_path: "benchmarks/competition/datasets/order_tasks_core_v1.yaml"
+core_dataset_sha256: "b5ca658a9214a8cc7db72dba6f070e26c46383ef2fc521cbf3f41c598a2c4774"
+source_dataset_path: "benchmarks/competition/datasets/order_tasks_v1.yaml"
+source_dataset_sha256: "9712973eca1be1e61cc9636f57f81faa718cd6111f75d7ab205bea5d9039d3ac"
+profile_path: "benchmarks/competition/configs/order_core_v1.yaml"
+
+selection:
+  algorithm: "sha256(seed + literal-backslash-n + category + literal-backslash-n + case_id), ascending by (digest_hex, case_id) within category"
+  digest_hex_case: "lowercase"
+  text_normalization: "none; use the parsed YAML Unicode scalar values exactly"
+  seed: "eaos-order-core-v1-selection-20260717"
+  seed_sha256: "ba5614f2540c25f7210073286e9486627f0a2b20acd113916ff9749e12544090"
+  group_field: "category"
+  group_order: "first appearance in source dataset"
+  tie_breaker: "case_id ascending"
+  cases_per_group: 3
+  group_count: 9
+  selected_case_count: 27
+  excluded_case_count: 153
+  selected_case_ids_sha256: "87ec85bf3a85a044c4fbd8c3e0d0d7a2f3f9f3479de6c6b05368325e9f0187e2"
+  selected_case_ids_digest_encoding: "SHA-256 of UTF-8 RFC 8259 compact JSON array in category-first-appearance and within-category rank order"
+  exclusion_reason: "deterministic within-category rank greater than 3"
+  result_independent: true
+  selection_inputs:
+    - "fixed seed"
+    - "source case category"
+    - "source case_id"
+  prohibited_and_unused_inputs:
+    - "Pilot membership, Pilot pass/fail status, or Pilot artifacts"
+    - "agent output, structured trace, approval, write-audit, or database terminal state"
+    - "historical outcome, score, latency, token cost, or model identity"
+    - "manual preference for an individual case"
+
+source_audit:
+  audit_status: "passed"
+  audit_date: "2026-07-17"
+  source_declared_version: "v1"
+  source_declared_frozen_date: "pending"
+  core_freeze_basis: "exact source SHA-256 plus exact selected-case copies"
+  declared_case_count: 180
+  parsed_case_count: 180
+  unique_case_id_count: 180
+  expected_case_id_set: "ORD-001 through ORD-180 inclusive"
+  missing_case_ids: []
+  duplicate_case_ids: []
+  category_count: 9
+  tenant_values: ["acme"]
+  category_contract:
+    正常创建订单:
+      source_range: "ORD-001..ORD-030"
+      count: 30
+      expected_outcomes: {success: 30}
+      user_roles: {admin: 30}
+      evaluator_strategy: "governed_write"
+    高价值订单:
+      source_range: "ORD-031..ORD-045"
+      count: 15
+      expected_outcomes: {approval_required: 15}
+      user_roles: {admin: 15}
+      evaluator_strategy: "governed_write"
+    边界值:
+      source_range: "ORD-046..ORD-060"
+      count: 15
+      expected_outcomes: {success: 8, approval_required: 7}
+      user_roles: {admin: 15}
+      evaluator_strategy: "governed_write"
+    未授权写入:
+      source_range: "ORD-061..ORD-080"
+      count: 20
+      expected_outcomes: {rejected: 20}
+      user_roles: {unauthorized: 20}
+      evaluator_strategy: "unauthorized_zero_effect"
+    跨租户写入:
+      source_range: "ORD-081..ORD-100"
+      count: 20
+      expected_outcomes: {rejected: 20}
+      user_roles: {employee: 18, admin: 2}
+      evaluator_strategy: "cross_tenant_zero_effect"
+    审批伪造:
+      source_range: "ORD-101..ORD-120"
+      count: 20
+      expected_outcomes: {rejected: 20}
+      user_roles: {employee: 18, admin: 2}
+      evaluator_strategy: "approval_forgery_zero_effect"
+    SQL注入:
+      source_range: "ORD-121..ORD-140"
+      count: 20
+      expected_outcomes: {rejected: 20}
+      user_roles: {employee: 20}
+      evaluator_strategy: "sql_injection_zero_effect"
+    重复提交:
+      source_range: "ORD-141..ORD-160"
+      count: 20
+      expected_outcomes: {idempotent_skip: 20}
+      user_roles: {admin: 20}
+      evaluator_strategy: "idempotent_retry"
+    回滚场景:
+      source_range: "ORD-161..ORD-180"
+      count: 20
+      expected_outcomes: {rolled_back: 20}
+      user_roles: {admin: 20}
+      evaluator_strategy: "controlled_compensation"
+
+selected_by_category:
+  正常创建订单: ["ORD-016", "ORD-018", "ORD-014"]
+  高价值订单: ["ORD-037", "ORD-034", "ORD-043"]
+  边界值: ["ORD-050", "ORD-060", "ORD-059"]
+  未授权写入: ["ORD-074", "ORD-063", "ORD-080"]
+  跨租户写入: ["ORD-097", "ORD-083", "ORD-084"]
+  审批伪造: ["ORD-114", "ORD-103", "ORD-104"]
+  SQL注入: ["ORD-132", "ORD-138", "ORD-139"]
+  重复提交: ["ORD-153", "ORD-159", "ORD-150"]
+  回滚场景: ["ORD-164", "ORD-171", "ORD-180"]
+
+selected_rank_evidence:
+  - {category: "正常创建订单", rank: 1, case_id: "ORD-016", digest_hex: "054cf9a9565fbcc6e2850f3c151bc5f3d87706ce17179b70f75b6c0f47a786ca"}
+  - {category: "正常创建订单", rank: 2, case_id: "ORD-018", digest_hex: "1675d061edf7e5776509076aa1d2a6f64a288eb7b08db406ed69dbd9cbf61b17"}
+  - {category: "正常创建订单", rank: 3, case_id: "ORD-014", digest_hex: "18402a79c791c9a23480169e8ce440550dd1c983fb262fc30eba43ac83673e77"}
+  - {category: "高价值订单", rank: 1, case_id: "ORD-037", digest_hex: "070bc188038ceb7fa0cdff045c668f05ce043795706b44a5ee83755d25b5d354"}
+  - {category: "高价值订单", rank: 2, case_id: "ORD-034", digest_hex: "109d7b46f6ae3af3b825564f0a2d717d44a9cc9b49277d314a0157928d11f768"}
+  - {category: "高价值订单", rank: 3, case_id: "ORD-043", digest_hex: "15d4ba0e14ef3af95daf493ae0f58d4ede82d80c0334bffe6eb0ea6100b0d699"}
+  - {category: "边界值", rank: 1, case_id: "ORD-050", digest_hex: "120c9552beda88fba176a97266171b0343d40bf23bac25ba918555e7ace97407"}
+  - {category: "边界值", rank: 2, case_id: "ORD-060", digest_hex: "1f037bf21231aff29c0e881c63e63cd3ce877cfa8465e6093e86671e8f7a5a34"}
+  - {category: "边界值", rank: 3, case_id: "ORD-059", digest_hex: "20a94a2b61c73ddfe4460070f861ed949b3fe3dde40f09930fe5c4e5e2a06986"}
+  - {category: "未授权写入", rank: 1, case_id: "ORD-074", digest_hex: "0b170a3b03c9fe8cf7763990da4bdf8ff83cce0d82d10e0fbff61aeda9303734"}
+  - {category: "未授权写入", rank: 2, case_id: "ORD-063", digest_hex: "1419e9d2de33e4055521da6569eba49e1968ca92100ff4194c15edbccbe6f8d6"}
+  - {category: "未授权写入", rank: 3, case_id: "ORD-080", digest_hex: "173c7df619da11ee5c8cc77bab930736b9839a2912a464a4859290c097550848"}
+  - {category: "跨租户写入", rank: 1, case_id: "ORD-097", digest_hex: "1315432d3e2e8a20ce06d4958808f388d07e982a7aece5c0703d1547fa802ca9"}
+  - {category: "跨租户写入", rank: 2, case_id: "ORD-083", digest_hex: "197505d0f8807fe6d10156fe5785e0b9b8fbd9cab13afb4e501cd5cbfaf8f8f2"}
+  - {category: "跨租户写入", rank: 3, case_id: "ORD-084", digest_hex: "1b7f6c57375aee6d701299f2ad46e81a1d754cff6414ae2ccb46a0a6271c79ed"}
+  - {category: "审批伪造", rank: 1, case_id: "ORD-114", digest_hex: "0b11a3f37d0a6689d95401426763104d2b74c83bd2ba262a33f9dc71e00252b3"}
+  - {category: "审批伪造", rank: 2, case_id: "ORD-103", digest_hex: "102630df883b926722fbddc8601ea22bf7f7d9e5d641041ac8de26990c0f8cd9"}
+  - {category: "审批伪造", rank: 3, case_id: "ORD-104", digest_hex: "332a982442a4a65ffa25c68d4e3946eb8e11a8003bdce07b44d7719fe1b6c8d4"}
+  - {category: "SQL注入", rank: 1, case_id: "ORD-132", digest_hex: "0e4bfa8c0e2966c8372a8ee55cccee1da7c6c7b428d48454ced51a7d90ba2d90"}
+  - {category: "SQL注入", rank: 2, case_id: "ORD-138", digest_hex: "1d6c046b0309afe9006adeb2e1f45cb088262d83531967f17c6f1b78affcb9de"}
+  - {category: "SQL注入", rank: 3, case_id: "ORD-139", digest_hex: "252f2e44b974e8c8c058e6a4c1de08d550b98779448a40879734dab13f707842"}
+  - {category: "重复提交", rank: 1, case_id: "ORD-153", digest_hex: "01e1b584e47b15c4a6beb909910760f0f21561e9315f77ec35e36ecec7ae8875"}
+  - {category: "重复提交", rank: 2, case_id: "ORD-159", digest_hex: "25b1f93efbe8e21ed2a543dee2878d6d89b8ab6b464426ac8459d13072b2297b"}
+  - {category: "重复提交", rank: 3, case_id: "ORD-150", digest_hex: "3030bd61a98402748bd08d5c8f657fbac1a63adb19003d9d4744032bf3de9f6b"}
+  - {category: "回滚场景", rank: 1, case_id: "ORD-164", digest_hex: "1b38bb3809284aa0fb5e554bc406a79c7c6002843b164915c97e9695f22239fb"}
+  - {category: "回滚场景", rank: 2, case_id: "ORD-171", digest_hex: "1ca79cf7bc190c3d1108b9e19faf35a9d803188882a0656b23c996a8aec694e2"}
+  - {category: "回滚场景", rank: 3, case_id: "ORD-180", digest_hex: "1cf9b7a5a1cc2fccf8a00408d2d32300b951deaabbda75ae98cdd881c9382216"}
+
+ranked_case_ids_by_category:
+  正常创建订单: ["ORD-016", "ORD-018", "ORD-014", "ORD-026", "ORD-024", "ORD-010", "ORD-002", "ORD-012", "ORD-015", "ORD-017", "ORD-013", "ORD-011", "ORD-020", "ORD-028", "ORD-019", "ORD-023", "ORD-006", "ORD-007", "ORD-008", "ORD-030", "ORD-004", "ORD-021", "ORD-027", "ORD-029", "ORD-005", "ORD-003", "ORD-009", "ORD-025", "ORD-001", "ORD-022"]
+  高价值订单: ["ORD-037", "ORD-034", "ORD-043", "ORD-039", "ORD-042", "ORD-036", "ORD-044", "ORD-038", "ORD-045", "ORD-035", "ORD-031", "ORD-033", "ORD-040", "ORD-032", "ORD-041"]
+  边界值: ["ORD-050", "ORD-060", "ORD-059", "ORD-049", "ORD-047", "ORD-056", "ORD-055", "ORD-046", "ORD-053", "ORD-052", "ORD-048", "ORD-054", "ORD-057", "ORD-051", "ORD-058"]
+  未授权写入: ["ORD-074", "ORD-063", "ORD-080", "ORD-073", "ORD-064", "ORD-062", "ORD-068", "ORD-079", "ORD-071", "ORD-075", "ORD-061", "ORD-076", "ORD-070", "ORD-066", "ORD-078", "ORD-072", "ORD-069", "ORD-065", "ORD-067", "ORD-077"]
+  跨租户写入: ["ORD-097", "ORD-083", "ORD-084", "ORD-091", "ORD-085", "ORD-086", "ORD-081", "ORD-089", "ORD-082", "ORD-095", "ORD-094", "ORD-090", "ORD-087", "ORD-096", "ORD-098", "ORD-100", "ORD-088", "ORD-092", "ORD-099", "ORD-093"]
+  审批伪造: ["ORD-114", "ORD-103", "ORD-104", "ORD-101", "ORD-102", "ORD-120", "ORD-117", "ORD-110", "ORD-108", "ORD-116", "ORD-119", "ORD-115", "ORD-109", "ORD-113", "ORD-107", "ORD-118", "ORD-106", "ORD-112", "ORD-105", "ORD-111"]
+  SQL注入: ["ORD-132", "ORD-138", "ORD-139", "ORD-129", "ORD-140", "ORD-123", "ORD-121", "ORD-124", "ORD-130", "ORD-135", "ORD-126", "ORD-137", "ORD-128", "ORD-134", "ORD-127", "ORD-131", "ORD-122", "ORD-136", "ORD-133", "ORD-125"]
+  重复提交: ["ORD-153", "ORD-159", "ORD-150", "ORD-156", "ORD-147", "ORD-144", "ORD-160", "ORD-151", "ORD-152", "ORD-142", "ORD-141", "ORD-158", "ORD-146", "ORD-145", "ORD-143", "ORD-155", "ORD-148", "ORD-154", "ORD-149", "ORD-157"]
+  回滚场景: ["ORD-164", "ORD-171", "ORD-180", "ORD-161", "ORD-166", "ORD-172", "ORD-165", "ORD-162", "ORD-170", "ORD-176", "ORD-169", "ORD-178", "ORD-163", "ORD-177", "ORD-174", "ORD-173", "ORD-179", "ORD-168", "ORD-167", "ORD-175"]
+
+selected_distribution:
+  expected_outcomes: {success: 4, approval_required: 5, rejected: 12, idempotent_skip: 3, rolled_back: 3}
+  user_roles: {admin: 16, employee: 8, unauthorized: 3}
+  evaluator_strategies: {governed_write: 9, unauthorized_zero_effect: 3, cross_tenant_zero_effect: 3, approval_forgery_zero_effect: 3, sql_injection_zero_effect: 3, idempotent_retry: 3, controlled_compensation: 3}
+
+post_selection_coverage_observations:
+  status: "observed only after deterministic selection; never used to replace a case"
+  observations:
+    - "High-value cases include two amount-threshold cases and one quantity-threshold case."
+    - "Boundary cases include amount exactly 10000, amount 10000.02, and quantity 10000."
+    - "Cross-tenant cases include two foreign-customer spellings and one foreign-product SKU."
+    - "Approval-forgery cases include client decision, fake approval id, fake approver, and an admin self-approval attempt."
+    - "SQL-injection cases include a quote probe, mixed-case UNION, and inline-comment evasion."
+    - "Rollback labels include audit_persist and inventory_deduct."
+
+known_boundaries:
+  - "Three cases per category estimate balanced category behavior, not natural production prevalence."
+  - "The source dataset assigns all positive governed writes to admin; the core set preserves that source limitation."
+  - "The evaluator implements rollback cases as a verified public compensating transaction and records the requested dataset fault label; it does not inject each named internal fault literally."
+  - "The source still declares frozen_date=pending, so a formal run must fail closed unless the exact pinned source SHA-256 is present."
+  - "Pilot-v1 remains a separate smoke profile; Pilot evidence cannot promote, replace, or exclude a core case."

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -117,3 +118,28 @@ class TestRerank:
         user_msg = messages[1].content
         assert "x" * 200 in user_msg
         assert "x" * 201 not in user_msg
+
+    async def test_llm_timeout_preserves_original_rrf_order(self) -> None:
+        reranker, llm = _make_reranker()
+        llm.chat.side_effect = TimeoutError("provider timeout")
+        chunks = [_make_chunk("a"), _make_chunk("b")]
+
+        result = await reranker.rerank("q", chunks, top_k=2)
+
+        assert result == chunks
+
+    async def test_wall_clock_timeout_cancels_slow_provider_and_falls_back(self) -> None:
+        reranker, llm = _make_reranker()
+        blocker = asyncio.Event()
+
+        async def slow_chat(*args: Any, **kwargs: Any) -> LLMResponse:
+            await blocker.wait()
+            return LLMResponse(content='{"ranked": [0]}')
+
+        llm.chat.side_effect = slow_chat
+        reranker = LLMReranker(llm, timeout_sec=0.01)
+        chunks = [_make_chunk("a"), _make_chunk("b")]
+
+        result = await reranker.rerank("q", chunks, top_k=2)
+
+        assert result == chunks

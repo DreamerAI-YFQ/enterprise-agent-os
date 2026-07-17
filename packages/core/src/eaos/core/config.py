@@ -191,7 +191,8 @@ class AppConfig(BaseSettings):
     uploads: UploadsConfig = Field(default_factory=UploadsConfig)
 
     secret_key: str = Field(
-        default="dev-secret-change-in-prod", alias="EAOS_APP__SECRET_KEY"
+        default="dev-secret-change-in-prod-use-at-least-32-bytes",
+        alias="EAOS_APP__SECRET_KEY",
     )
     debug: bool = Field(default=False, alias="EAOS_APP__DEBUG")
     environment: str = Field(default="local", alias="EAOS_APP__ENVIRONMENT")
@@ -229,7 +230,7 @@ class AppConfig(BaseSettings):
             if "__" not in rest:
                 continue
             section, _ = rest.split("__", 1)
-            flat_key = f"EAOS_{section}__{rest[len(section) + 2:]}"
+            flat_key = f"EAOS_{section}__{rest[len(section) + 2 :]}"
             if flat_key not in os.environ:
                 os.environ[flat_key] = os.environ[key]
         return cls()

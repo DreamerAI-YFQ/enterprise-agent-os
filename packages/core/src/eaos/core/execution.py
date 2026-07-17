@@ -11,15 +11,16 @@ causes ``fail_closed()`` to raise, preventing unattributed writes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
-from uuid import UUID
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from uuid import UUID
 
 # -- C01-01: Action and resource vocabulary ----------------------------------
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """Canonical action verbs used across Harness, audit, and evaluation."""
 
     AGENT_EXECUTE = "agent.execute"
@@ -35,7 +36,7 @@ class Action(str, Enum):
 RESOURCE_SEP = "."
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     """Risk levels for governance decisions."""
 
     LOW = "low"

@@ -7,12 +7,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
-from eaos.core.auth import create_jwt_token
+from eaos.core.auth import create_jwt_token, verify_password
 from eaos.core.config import AppConfig
 from eaos.gateway.api.app import create_app
 from httpx import ASGITransport, AsyncClient
 
-SECRET = "f0-t12-t13-t14-secret-32byte!"
+SECRET = "f0-t12-t13-t14-secret-at-least-32-bytes"
 TID = UUID("00000000-0000-0000-0000-000000000001")
 ADMIN_ID = UUID("00000000-0000-0000-0000-000000000010")
 EMP_ID = UUID("00000000-0000-0000-0000-000000000020")
@@ -62,9 +62,7 @@ class TestMe:
         }
         app = create_app(_config())
         app.state.db = _mock_db(single_row=row)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/me",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -77,9 +75,7 @@ class TestMe:
     async def test_put_preferences(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
                 "/me/preferences",
                 json={"preferences": {"theme": "light", "lang": "en"}},
@@ -92,9 +88,7 @@ class TestMe:
     async def test_no_token_returns_401(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/me")
         assert resp.status_code == 401
 
@@ -108,19 +102,13 @@ class TestMetrics:
     async def test_get_metrics(self) -> None:
         db: Any = AsyncMock()
         # fetch_val is called 7 times for counts
-        db.fetch_val = AsyncMock(
-            side_effect=[10, 5, 30, 8, 12, 3, 2]
-        )
+        db.fetch_val = AsyncMock(side_effect=[10, 5, 30, 8, 12, 3, 2])
         db.fetch = AsyncMock(
-            return_value=[
-                {"day": datetime(2026, 7, 1, tzinfo=UTC), "count": 5}
-            ]
+            return_value=[{"bucket": datetime(2026, 7, 1, tzinfo=UTC), "count": 5}]
         )
         app = create_app(_config())
         app.state.db = db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/metrics",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -131,15 +119,13 @@ class TestMetrics:
         assert data["counts"]["agents"] == 5
         assert data["counts"]["sessions"] == 30
         assert data["counts"]["pending_approvals"] == 3
-        assert len(data["activity_7d"]) == 1
-        assert data["activity_7d"][0]["sessions"] == 5
+        assert len(data["activity"]) == 1
+        assert data["activity"][0]["sessions"] == 5
 
     async def test_employee_forbidden(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/metrics",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -168,9 +154,7 @@ class TestUsers:
     async def test_list_users(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[_user_row(), _user_row(email="b@test.com")])
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/users",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -187,26 +171,59 @@ class TestUsers:
             side_effect=[None, _user_row(user_id=new_id, email="new@test.com")]
         )
         app.state.db = db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/admin/users",
-                json={"email": "new@test.com", "name": "New User"},
+                json={
+                    "email": "new@test.com",
+                    "name": "New User",
+                    "password": "initial-password",
+                },
                 headers={"Authorization": f"Bearer {_admin_token()}"},
             )
         assert resp.status_code == 201
         assert resp.json()["email"] == "new@test.com"
+        assert "password_hash" not in resp.json()
+        insert_call = db.fetch_one.await_args_list[1]
+        stored_hash = insert_call.args[4]
+        assert isinstance(stored_hash, str)
+        assert stored_hash != "initial-password"
+        assert verify_password("initial-password", stored_hash) is True
+
+    async def test_create_user_requires_strong_initial_password(self) -> None:
+        app = create_app(_config())
+        db = _mock_db()
+        app.state.db = db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            missing = await client.post(
+                "/admin/users",
+                json={"email": "new@test.com", "name": "New User"},
+                headers={"Authorization": f"Bearer {_admin_token()}"},
+            )
+            short = await client.post(
+                "/admin/users",
+                json={
+                    "email": "new@test.com",
+                    "name": "New User",
+                    "password": "short",
+                },
+                headers={"Authorization": f"Bearer {_admin_token()}"},
+            )
+        assert missing.status_code == 422
+        assert short.status_code == 422
+        db.fetch_one.assert_not_awaited()
 
     async def test_create_duplicate_email(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"id": uuid4()})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/admin/users",
-                json={"email": "dup@test.com", "name": "Dup"},
+                json={
+                    "email": "dup@test.com",
+                    "name": "Dup",
+                    "password": "initial-password",
+                },
                 headers={"Authorization": f"Bearer {_admin_token()}"},
             )
         assert resp.status_code == 409
@@ -220,9 +237,7 @@ class TestUsers:
         db = _mock_db()
         db.fetch_one = AsyncMock(side_effect=[existing, updated])
         app.state.db = db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
                 f"/admin/users/{uid}",
                 json={"name": "Updated"},
@@ -231,13 +246,35 @@ class TestUsers:
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
+    async def test_update_user_can_reset_password_without_serializing_hash(self) -> None:
+        uid = uuid4()
+        existing = _user_row(user_id=uid)
+        updated = {**existing, "password_hash": "must-not-leak"}
+        app = create_app(_config())
+        db = _mock_db()
+        db.fetch_one = AsyncMock(side_effect=[existing, updated])
+        app.state.db = db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put(
+                f"/admin/users/{uid}",
+                json={"password": "replacement-password"},
+                headers={"Authorization": f"Bearer {_admin_token()}"},
+            )
+        assert resp.status_code == 200
+        assert "password_hash" not in resp.json()
+        password_updates = [
+            call for call in db.execute.await_args_list if "password_hash" in call.args[0]
+        ]
+        assert len(password_updates) == 1
+        stored_hash = password_updates[0].args[1]
+        assert isinstance(stored_hash, str)
+        assert verify_password("replacement-password", stored_hash) is True
+
     async def test_delete_user(self) -> None:
         uid = uuid4()
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"id": uid})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/admin/users/{uid}",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -247,9 +284,7 @@ class TestUsers:
     async def test_employee_forbidden(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/users",
                 headers={"Authorization": f"Bearer {_employee_token()}"},
@@ -266,9 +301,7 @@ class TestConfigSettings:
     async def test_get_models_empty(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/models",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -279,9 +312,7 @@ class TestConfigSettings:
     async def test_put_models(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
                 "/admin/models",
                 json={"default_model": "gpt-4", "providers": {"openai": {}}},
@@ -294,9 +325,7 @@ class TestConfigSettings:
     async def test_get_plugins(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"value": '{"dingtalk": {"enabled": true}}'})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/plugins",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -307,9 +336,7 @@ class TestConfigSettings:
     async def test_put_plugins(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
                 "/admin/plugins",
                 json={"plugins": {"slack": {"enabled": False}}},
@@ -339,9 +366,7 @@ class TestMcpConnectors:
         ]
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=rows)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/mcp/connectors",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -375,9 +400,7 @@ class TestReportTemplates:
     async def test_list_templates(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(fetch_rows=[_template_row()])
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/admin/report-templates",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -388,9 +411,7 @@ class TestReportTemplates:
     async def test_create_template(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=_template_row())
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/admin/report-templates",
                 json={"name": "Monthly Report", "template_type": "summary"},
@@ -403,9 +424,7 @@ class TestReportTemplates:
         tpl_id = uuid4()
         app = create_app(_config())
         app.state.db = _mock_db(single_row={"id": tpl_id})
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/admin/report-templates/{tpl_id}",
                 headers={"Authorization": f"Bearer {_admin_token()}"},
@@ -415,9 +434,7 @@ class TestReportTemplates:
     async def test_delete_not_found(self) -> None:
         app = create_app(_config())
         app.state.db = _mock_db(single_row=None)
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.delete(
                 f"/admin/report-templates/{uuid4()}",
                 headers={"Authorization": f"Bearer {_admin_token()}"},

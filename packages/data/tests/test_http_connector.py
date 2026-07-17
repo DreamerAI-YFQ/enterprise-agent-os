@@ -212,6 +212,30 @@ class TestRead:
         call = mock_client.request.call_args
         assert call.kwargs["params"]["customer_id"] == "cus_1"
 
+    async def test_read_with_exact_id_uses_record_endpoint(self) -> None:
+        spec = _make_spec()
+        resp = _make_response(200, {"id": "ord_1", "amount": 100})
+        mock_client = _make_client(side_effect=[resp])
+        conn = HttpApiConnector(
+            spec,
+            _oauth2_auth(),
+            mock_client,
+            {"access_token": "t"},
+        )
+
+        result = await conn.read(
+            TID,
+            "orders",
+            ReadQuery(filters={"id": "ord_1"}),
+        )
+
+        assert result.total == 1
+        assert result.rows == [{"id": "ord_1", "amount": 100}]
+        call = mock_client.request.call_args
+        assert call.args[0] == "GET"
+        assert call.args[1].endswith("/api/v1/orders/ord_1")
+        assert call.kwargs["params"] is None
+
     async def test_read_list_body_without_data_field(self) -> None:
         """When response body is a bare list (no pagination data_field), extract directly."""
         spec = _make_spec()  # no pagination → else branch

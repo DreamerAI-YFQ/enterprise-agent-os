@@ -14,15 +14,21 @@
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "api:gen": "pnpm --filter @eaos/api gen",
-    "api:check": "pnpm --filter @eaos/api check",
+    "api:gen": "pnpm --filter @eaos/shared gen",
+    "api:check": "pnpm --filter @eaos/shared check",
     "dev:desktop": "pnpm --filter desktop-employee dev",
     "dev:desktop:admin": "pnpm --filter desktop-admin dev",
     "build:desktop": "pnpm --filter desktop-employee build",
     "build:desktop:admin": "pnpm --filter desktop-admin build"
   },
   "devDependencies": {
-    "typescript": "^5.6.3"
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "globals": "^16.5.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.64.0"
   },
   "packageManager": "pnpm@11.9.0",
   "engines": {

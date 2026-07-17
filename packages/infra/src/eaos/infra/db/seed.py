@@ -33,14 +33,19 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from eaos.core.auth import hash_password
 from eaos.core.config import AppConfig
 from eaos.infra.db.postgres import PgClient
 from sqlalchemy.sql import text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from typing import Protocol
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    class _StatementExecutor(Protocol):
+        async def execute(self, statement: Any) -> Any: ...
 
 # Fixed UUIDs for verifiable demo data.
 TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -75,13 +80,13 @@ CHUNK_CRM_3 = UUID("00000000-0000-0000-0000-000000000516")
 
 # ERP mock data UUIDs (00000000-0000-0000-0000-0000000006XX).
 ERP_PRODUCT_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{i:02d}") for i in range(1, 11)]
-ERP_CUSTOMER_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{10+i:02d}") for i in range(1, 11)]
+ERP_CUSTOMER_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{10 + i:02d}") for i in range(1, 11)]
 ERP_ORDER_IDS = [UUID(f"00000000-0000-0000-0000-00000000062{i:x}") for i in range(1, 16)]
-ERP_INVENTORY_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{30+i:02d}") for i in range(1, 11)]
+ERP_INVENTORY_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{30 + i:02d}") for i in range(1, 11)]
 
 # CRM mock data UUIDs.
-CRM_LEAD_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{40+i:02d}") for i in range(1, 11)]
-CRM_OPP_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{50+i:02d}") for i in range(1, 11)]
+CRM_LEAD_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{40 + i:02d}") for i in range(1, 11)]
+CRM_OPP_IDS = [UUID(f"00000000-0000-0000-0000-0000000006{50 + i:02d}") for i in range(1, 11)]
 CRM_ACTIVITY_IDS = [UUID(f"00000000-0000-0000-0000-00000000066{i:x}") for i in range(1, 16)]
 
 # Ontology node UUIDs.
@@ -154,27 +159,206 @@ def _json(value: Mapping[str, object]) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def _truncate(session: AsyncSession) -> None:
-    """Clear all tables in FK-reverse order. CASCADE handles dependencies."""
-    statements = [
-        "TRUNCATE evolution.preference_pairs, evolution.datasets, evolution.training_runs CASCADE",
-        "TRUNCATE evolution.feedback_signals CASCADE",
-        "TRUNCATE harness.evolution_strategies, harness.quality_metrics, "
-        "harness.audit_logs, harness.quotas CASCADE",
-        "TRUNCATE trace.spans CASCADE",
-        "TRUNCATE data.query_history, data.datasources CASCADE",
-        "TRUNCATE knowledge.org_memories, knowledge.chunks, "
-        "knowledge.documents, knowledge.ontology_nodes, knowledge.ontologies CASCADE",
-        "TRUNCATE skills.assignments, skills.skill_versions, skills.skills CASCADE",
-        "TRUNCATE agent.agent_skills, agent.sessions, agent.agents CASCADE",
-        "TRUNCATE iam.permissions, iam.memberships, iam.users, "
-        "iam.departments, iam.tenants CASCADE",
-        # M2: mock external data (no FK to core schemas; CRM before ERP due to lead->opp ref).
-        "TRUNCATE crm.activities, crm.opportunities, crm.leads CASCADE",
-        "TRUNCATE erp.inventory, erp.orders, erp.customers, erp.products CASCADE",
+# Every mutable table created by Alembic migrations 0001..0018, ordered from
+# dependents to parents.  ``trace.spans`` covers all of its range partitions.
+# Keep schema metadata (notably ``public.alembic_version``) out of this list.
+MIGRATED_MUTABLE_TABLES = (
+    "evolution.preference_pairs",
+    "harness.evolution_strategies",
+    "evolution.training_runs",
+    "evolution.datasets",
+    "evolution.feedback_signals",
+    "harness.write_audit",
+    "harness.approvals",
+    "harness.quality_metrics",
+    "harness.audit_logs",
+    "harness.quotas",
+    "harness.safety_cases",
+    "harness.policies",
+    "trace.spans",
+    "data.query_history",
+    "data.external_connections",
+    "data.datasources",
+    "knowledge.contributions",
+    "knowledge.org_memories",
+    "knowledge.chunks",
+    "knowledge.documents",
+    "knowledge.ontology_nodes",
+    "knowledge.ontologies",
+    "config.report_templates",
+    "config.settings",
+    "agent.messages",
+    "agent.triggers",
+    "skills.assignments",
+    "agent.agent_skills",
+    "skills.skill_versions",
+    "skills.skills",
+    "agent.sessions",
+    "agent.agents",
+    "iam.notifications",
+    "iam.sso_configs",
+    "iam.permissions",
+    "iam.memberships",
+    "iam.users",
+    "iam.departments",
+    "iam.tenants",
+    "crm.activities",
+    "crm.leads",
+    "crm.opportunities",
+    "erp.inventory",
+    "erp.orders",
+    "erp.customers",
+    "erp.products",
+)
+
+# LangGraph creates these data tables at runtime rather than through Alembic.
+# ``checkpoint_migrations`` is schema-version metadata and must be preserved.
+OPTIONAL_RUNTIME_MUTABLE_TABLES = (
+    "public.checkpoint_writes",
+    "public.checkpoint_blobs",
+    "public.checkpoints",
+)
+
+PROTECTED_VERSION_TABLES = (
+    "public.alembic_version",
+    "public.checkpoint_migrations",
+)
+
+EXPECTED_SEED_COUNTS: dict[str, int] = dict.fromkeys(MIGRATED_MUTABLE_TABLES, 0)
+EXPECTED_SEED_COUNTS.update(
+    {
+        "harness.quotas": 1,
+        "data.query_history": 1,
+        "data.datasources": 3,
+        "knowledge.org_memories": 1,
+        "knowledge.chunks": 6,
+        "knowledge.documents": 2,
+        "knowledge.ontology_nodes": 49,
+        "knowledge.ontologies": 1,
+        "skills.assignments": 1,
+        "agent.agent_skills": 2,
+        "skills.skill_versions": 3,
+        "skills.skills": 3,
+        "agent.sessions": 1,
+        "agent.agents": 2,
+        "iam.permissions": 10,
+        "iam.memberships": 3,
+        "iam.users": 3,
+        "iam.departments": 2,
+        "iam.tenants": 1,
+        "crm.activities": 15,
+        "crm.leads": 10,
+        "crm.opportunities": 10,
+        "erp.inventory": 10,
+        "erp.orders": 15,
+        "erp.customers": 10,
+        "erp.products": 10,
+    }
+)
+
+
+async def _truncate(session: _StatementExecutor) -> None:
+    """Clear all mutable data while preserving schema-version metadata."""
+
+    # One atomic statement makes the complete FK graph explicit.  The tuple is
+    # already in FK-reverse order; CASCADE is a future-proof guard for newly
+    # added constraints, and RESTART IDENTITY resets BIGSERIAL audit ids.
+    migrated = ", ".join(MIGRATED_MUTABLE_TABLES)
+    await session.execute(
+        text(f"TRUNCATE TABLE {migrated} RESTART IDENTITY CASCADE")
+    )
+
+    # Checkpoint tables do not exist in a freshly migrated DB until LangGraph
+    # starts once.  A guarded block resets them when present without touching
+    # either Alembic's or LangGraph's migration-version table.
+    await session.execute(
+        text(
+            """
+            DO $$
+            BEGIN
+                IF to_regclass('public.checkpoint_writes') IS NOT NULL THEN
+                    EXECUTE 'TRUNCATE TABLE public.checkpoint_writes';
+                END IF;
+                IF to_regclass('public.checkpoint_blobs') IS NOT NULL THEN
+                    EXECUTE 'TRUNCATE TABLE public.checkpoint_blobs';
+                END IF;
+                IF to_regclass('public.checkpoints') IS NOT NULL THEN
+                    EXECUTE 'TRUNCATE TABLE public.checkpoints';
+                END IF;
+            END
+            $$
+            """
+        )
+    )
+
+
+async def _collect_seed_counts(session: AsyncSession) -> dict[str, int]:
+    """Read deterministic seed counts, including runtime tables when present."""
+
+    migrated_query = " UNION ALL ".join(
+        f"SELECT '{table_name}' AS table_name, count(*)::bigint AS row_count "
+        f"FROM {table_name}"
+        for table_name in MIGRATED_MUTABLE_TABLES
+    )
+    migrated_result = await session.execute(text(migrated_query))
+    counts = {
+        str(row["table_name"]): int(row["row_count"])
+        for row in migrated_result.mappings().all()
+    }
+
+    existing_result = await session.execute(
+        text(
+            """
+            SELECT 'public.' || tablename AS table_name
+            FROM pg_catalog.pg_tables
+            WHERE schemaname = 'public'
+              AND tablename IN ('checkpoint_writes', 'checkpoint_blobs', 'checkpoints')
+            ORDER BY tablename
+            """
+        )
+    )
+    existing_runtime_tables = [
+        str(row["table_name"]) for row in existing_result.mappings().all()
     ]
-    for stmt in statements:
-        await session.execute(text(stmt))
+    if existing_runtime_tables:
+        runtime_query = " UNION ALL ".join(
+            f"SELECT '{table_name}' AS table_name, count(*)::bigint AS row_count "
+            f"FROM {table_name}"
+            for table_name in existing_runtime_tables
+        )
+        runtime_result = await session.execute(text(runtime_query))
+        counts.update(
+            {
+                str(row["table_name"]): int(row["row_count"])
+                for row in runtime_result.mappings().all()
+            }
+        )
+    return counts
+
+
+def _assert_seed_baseline(counts: Mapping[str, int]) -> None:
+    """Raise if any migrated or present runtime table differs from baseline."""
+
+    mismatches: list[str] = []
+    for table_name, expected in EXPECTED_SEED_COUNTS.items():
+        actual = counts.get(table_name)
+        if actual != expected:
+            mismatches.append(f"{table_name}: expected={expected}, actual={actual}")
+    for table_name in OPTIONAL_RUNTIME_MUTABLE_TABLES:
+        if table_name in counts and counts[table_name] != 0:
+            mismatches.append(
+                f"{table_name}: expected=0, actual={counts[table_name]}"
+            )
+    if mismatches:
+        raise RuntimeError(
+            "seed baseline verification failed: " + "; ".join(mismatches)
+        )
+
+
+async def _verify_seed_baseline(session: AsyncSession) -> dict[str, int]:
+    counts = await _collect_seed_counts(session)
+    _assert_seed_baseline(counts)
+    return counts
 
 
 async def _seed_iam(session: AsyncSession) -> None:
@@ -209,32 +393,39 @@ async def _seed_iam(session: AsyncSession) -> None:
     )
     print(f"  iam.departments: 2 rows (rnd={DEPT_RND}, sales={DEPT_SALES})")
 
+    admin_password_hash = hash_password("EaosDemo-Admin-2026!")
+    manager_password_hash = hash_password("EaosDemo-Manager-2026!")
+    employee_password_hash = hash_password("EaosDemo-Employee-2026!")
     await session.execute(
         text(
-            "INSERT INTO iam.users (id, tenant_id, email, name, role, status) "
-            "VALUES (:p0, :p1, :p2, :p3, :p4, :p5), "
-            "(:p6, :p7, :p8, :p9, :p10, :p11), "
-            "(:p12, :p13, :p14, :p15, :p16, :p17)"
+            "INSERT INTO iam.users "
+            "(id, tenant_id, email, name, password_hash, role, status) "
+            "VALUES (:p0, :p1, :p2, :p3, :p4, :p5, :p6), "
+            "(:p7, :p8, :p9, :p10, :p11, :p12, :p13), "
+            "(:p14, :p15, :p16, :p17, :p18, :p19, :p20)"
         ),
         {
             "p0": USER_ADMIN,
             "p1": TENANT_ID,
             "p2": "admin@acme.com",
             "p3": "Alice Admin",
-            "p4": "admin",
-            "p5": "active",
-            "p6": USER_MANAGER,
-            "p7": TENANT_ID,
-            "p8": "manager@acme.com",
-            "p9": "Morgan Manager",
-            "p10": "manager",
-            "p11": "active",
-            "p12": USER_EMPLOYEE,
-            "p13": TENANT_ID,
-            "p14": "employee@acme.com",
-            "p15": "Evan Employee",
-            "p16": "employee",
-            "p17": "active",
+            "p4": admin_password_hash,
+            "p5": "admin",
+            "p6": "active",
+            "p7": USER_MANAGER,
+            "p8": TENANT_ID,
+            "p9": "manager@acme.com",
+            "p10": "Morgan Manager",
+            "p11": manager_password_hash,
+            "p12": "manager",
+            "p13": "active",
+            "p14": USER_EMPLOYEE,
+            "p15": TENANT_ID,
+            "p16": "employee@acme.com",
+            "p17": "Evan Employee",
+            "p18": employee_password_hash,
+            "p19": "employee",
+            "p20": "active",
         },
     )
     print("  iam.users: 3 rows (admin/manager/employee)")
@@ -314,7 +505,17 @@ async def _seed_iam(session: AsyncSession) -> None:
             "p39": _json({}),
         },
     )
-    print("  iam.permissions: 8 rows")
+    await session.execute(
+        text(
+            "INSERT INTO iam.permissions "
+            '(tenant_id, role, resource, action, "constraint") '
+            "VALUES (:p0, 'employee', 'orders', 'submit_write', '{}'::jsonb), "
+            "(:p0, 'employee', 'orders', 'execute_approved_write', '{}'::jsonb) "
+            "ON CONFLICT (tenant_id, role, resource, action) DO NOTHING"
+        ),
+        {"p0": TENANT_ID},
+    )
+    print("  iam.permissions: 10 rows")
 
 
 async def _seed_agent(session: AsyncSession) -> None:
@@ -1501,6 +1702,8 @@ async def main() -> None:
             await _seed_crm(session)
             await _seed_data(session)
             await _seed_harness(session)
+            await _verify_seed_baseline(session)
+            print("  deterministic seed baseline verified")
 
         print("Seed completed successfully.")
         print(f"  tenant={TENANT_ID}")

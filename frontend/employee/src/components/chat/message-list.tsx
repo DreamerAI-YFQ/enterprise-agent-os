@@ -6,14 +6,10 @@ import { MessageBubble } from "./message-bubble";
 
 interface MessageListProps {
   messages: ChatMessage[];
-  onApprove?: (
-    messageId: string,
-    decision: "approved" | "rejected",
-    reason?: string
-  ) => void;
+  onResumeApproval?: (messageId: string) => void;
 }
 
-export function MessageList({ messages, onApprove }: MessageListProps) {
+export function MessageList({ messages, onResumeApproval }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,7 +31,11 @@ export function MessageList({ messages, onApprove }: MessageListProps) {
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
       {messages.map((m) => (
-        <MessageBubble key={m.id} message={m} onApprove={onApprove} />
+        <MessageBubble
+          key={m.id}
+          message={m}
+          onResumeApproval={onResumeApproval}
+        />
       ))}
       <div ref={bottomRef} />
     </div>

@@ -170,7 +170,7 @@ export default function SkillsPage() {
     },
   });
 
-  const allSkills = query.data ?? [];
+  const allSkills = useMemo(() => query.data ?? [], [query.data]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return allSkills;

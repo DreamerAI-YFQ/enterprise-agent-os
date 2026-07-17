@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import secrets
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from eaos.infra.db.base import DbClient
+if TYPE_CHECKING:
+    from eaos.infra.db.base import DbClient
 
 
 @dataclass(frozen=True)
@@ -111,8 +112,12 @@ class OIDCService:
 
     async def get_authorization_url(self, state: str) -> str:
         metadata = await self._load_metadata()
-        from authlib.integrations.base_client import OAuth2Error  # noqa: F401
-        from authlib.integrations.httpx_client import AsyncOAuth2Client
+        from authlib.integrations.base_client import (  # type: ignore[import-untyped]
+            OAuth2Error,  # noqa: F401
+        )
+        from authlib.integrations.httpx_client import (  # type: ignore[import-untyped]
+            AsyncOAuth2Client,
+        )
 
         client = AsyncOAuth2Client(
             client_id=self.client_id,
@@ -120,10 +125,8 @@ class OIDCService:
             scope=self.scope,
             redirect_uri=self.redirect_uri,
         )
-        url, _ = client.create_authorization_url(
-            metadata["authorization_endpoint"], state=state
-        )
-        return url
+        url, _ = client.create_authorization_url(metadata["authorization_endpoint"], state=state)
+        return str(url)
 
     async def exchange_code(self, code: str) -> dict[str, Any]:
         metadata = await self._load_metadata()
@@ -161,8 +164,8 @@ class LDAPService:
         self.use_ssl = cfg.get("use_ssl", True)
 
     def authenticate(self, username: str, password: str) -> dict[str, Any] | None:
-        from ldap3 import ALL, Server, Connection
-        from ldap3.core.exceptions import LDAPException
+        from ldap3 import Connection, Server  # type: ignore[import-untyped]
+        from ldap3.core.exceptions import LDAPException  # type: ignore[import-untyped]
 
         server = Server(self.server_url, use_ssl=self.use_ssl)
         # Try template-based bind first (faster).
@@ -174,15 +177,11 @@ class LDAPService:
                 # Optionally fetch email/name from attributes.
                 if self.search_filter:
                     search = self.search_filter.replace("{username}", username)
-                    conn.search(
-                        self.base_dn, search, attributes=["mail", "cn", "displayName"]
-                    )
+                    conn.search(self.base_dn, search, attributes=["mail", "cn", "displayName"])
                     if conn.entries:
                         entry = conn.entries[0]
                         result["email"] = str(entry.mail.value) if entry.mail else username
-                        result["name"] = (
-                            str(entry.cn.value) if entry.cn else username
-                        )
+                        result["name"] = str(entry.cn.value) if entry.cn else username
                 conn.unbind()
                 return result
             except LDAPException:
@@ -232,7 +231,9 @@ class SAMLService:
         if self._settings is not None:
             return self._settings
 
-        from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
+        from onelogin.saml2.idp_metadata_parser import (  # type: ignore[import-not-found]
+            OneLogin_Saml2_IdPMetadataParser,
+        )
 
         idp_metadata_xml = self.config.config.get("idp_metadata", "")
         if not idp_metadata_xml:
@@ -271,15 +272,13 @@ class SAMLService:
 
     def get_login_url(self, request_dict: dict[str, Any], state: str) -> str:
         """Generate AuthnRequest and return the IdP SSO redirect URL."""
-        from onelogin.saml2.auth import OneLogin_Saml2_Auth
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth  # type: ignore[import-not-found]
 
         settings = self._build_settings()
         auth = OneLogin_Saml2_Auth(request_dict, settings)
         return str(auth.login(return_to=state))
 
-    def process_acs(
-        self, request_dict: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def process_acs(self, request_dict: dict[str, Any]) -> dict[str, Any] | None:
         """Process SAML Response at the ACS endpoint.
 
         Returns dict with nameid, email, name on success; None on auth failure.
@@ -301,7 +300,9 @@ class SAMLService:
         email = (
             attrs.get("email", [None])[0]
             or attrs.get("mail", [None])[0]
-            or attrs.get("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", [None])[0]
+            or attrs.get(
+                "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", [None]
+            )[0]
             or nameid
         )
         name = (
@@ -345,7 +346,7 @@ async def find_or_create_user(
         email,
     )
     if row:
-        return row["id"], row["role"], False
+        return UUID(str(row["id"])), str(row["role"]), False
     # JIT create.
     new_row = await db.fetch_one(
         "INSERT INTO iam.users (tenant_id, email, name, role, status) "
@@ -357,7 +358,7 @@ async def find_or_create_user(
     )
     if new_row is None:
         raise RuntimeError("failed to JIT create user")
-    return new_row["id"], new_row["role"], True
+    return UUID(str(new_row["id"])), str(new_row["role"]), True
 
 
 # -- State store (Redis with in-process fallback) ---------------------------
@@ -370,9 +371,7 @@ _STATE_TTL = 600  # 10 minutes
 _STATE_PREFIX = "sso:state:"
 
 
-async def issue_state(
-    redis: Any | None, tenant_id: UUID, provider_key: str
-) -> str:
+async def issue_state(redis: Any | None, tenant_id: UUID, provider_key: str) -> str:
     """Issue an opaque state token, stored in Redis (or in-process fallback).
 
     When ``redis`` is provided, the state is stored with a 10-minute TTL so it
@@ -388,9 +387,7 @@ async def issue_state(
     return state
 
 
-async def consume_state(
-    redis: Any | None, state: str
-) -> tuple[UUID, str] | None:
+async def consume_state(redis: Any | None, state: str) -> tuple[UUID, str] | None:
     """Consume a state token (one-time use). Returns (tenant_id, provider_key)."""
     if redis is not None:
         key = f"{_STATE_PREFIX}{state}"

@@ -184,4 +184,3 @@ class TestRegisterChannel:
         await asyncio.sleep(0)
         assert len(ch2.send_streaming_calls) == 1
         assert len(ch1.send_streaming_calls) == 0
-

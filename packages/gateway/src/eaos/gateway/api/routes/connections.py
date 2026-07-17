@@ -15,8 +15,8 @@ from uuid import UUID  # noqa: TC003 — Pydantic needs UUID at runtime
 
 from eaos.core.auth import Principal  # noqa: TC002 — runtime for FastAPI
 from eaos.data.connection_types import ConnectionSpec
-from eaos.gateway.api.routes.admin import require_admin
 from eaos.gateway.api.deps import get_db
+from eaos.gateway.api.routes.admin import require_admin
 from eaos.infra.db.base import DbClient  # noqa: TC002 — runtime for FastAPI
 from fastapi import APIRouter, Depends, HTTPException, Query, Request  # noqa: TC002
 from pydantic import BaseModel
@@ -249,8 +249,7 @@ async def call_logs(
         offset,
     )
     count_row = await db.fetch_one(
-        "SELECT COUNT(*) AS cnt FROM harness.write_audit "
-        "WHERE tenant_id = :p0 AND tool_name = :p1",
+        "SELECT COUNT(*) AS cnt FROM harness.write_audit WHERE tenant_id = :p0 AND tool_name = :p1",
         principal.tenant_id,
         existing.name,
     )

@@ -12,7 +12,7 @@ import csv
 import io
 from dataclasses import asdict
 from datetime import datetime  # noqa: TC003 — FastAPI needs datetime at runtime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID  # noqa: TC003 — Pydantic needs UUID at runtime
 
 from eaos.core.auth import Principal  # noqa: TC002 — runtime for FastAPI type hints
@@ -21,6 +21,9 @@ from eaos.infra.db.base import DbClient  # noqa: TC002 — runtime for FastAPI t
 from fastapi import APIRouter, Depends, HTTPException, Query, Request  # noqa: TC002
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 router = APIRouter(prefix="/admin")
 
@@ -37,7 +40,10 @@ async def require_admin(
     return principal
 
 
-def require_permission(resource: str, action: str):  # noqa: ANN201
+def require_permission(
+    resource: str,
+    action: str,
+) -> Callable[..., Awaitable[Principal]]:
     """Build a dependency that checks iam.permissions for fine-grained RBAC.
 
     Admins short-circuit to allow-all. Non-admin roles must have a matching
@@ -94,6 +100,10 @@ class ApprovalActionRequest(BaseModel):
     reason: str | None = None
 
 
+class WriteRollbackRequest(BaseModel):
+    reason: str = "manual compensating rollback"
+
+
 class ApprovalListResponse(BaseModel):
     items: list[dict[str, Any]]
     total: int
@@ -140,9 +150,7 @@ async def create_trigger(
     valid = {t.value: t for t in AmbientTrigger}
     trigger_type = valid.get(body.trigger_type)
     if trigger_type is None:
-        raise HTTPException(
-            status_code=422, detail=f"invalid trigger_type: {body.trigger_type}"
-        )
+        raise HTTPException(status_code=422, detail=f"invalid trigger_type: {body.trigger_type}")
     config = TriggerConfig(
         trigger_type=trigger_type,
         agent_id=body.agent_id,
@@ -220,9 +228,7 @@ async def list_audit_logs(
     principal: Principal = Depends(require_admin),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
-    where_sql, params = _audit_where(
-        principal.tenant_id, user_id, action, start_time, end_time
-    )
+    where_sql, params = _audit_where(principal.tenant_id, user_id, action, start_time, end_time)
     count_row = await db.fetch_one(
         f"SELECT COUNT(*) AS cnt FROM harness.audit_logs WHERE {where_sql}",
         *params,
@@ -282,6 +288,54 @@ async def list_audit_logs(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+@router.get("/write-audits/{audit_id}", tags=["admin"])
+async def get_write_audit(
+    audit_id: UUID,
+    principal: Principal = Depends(require_admin),  # noqa: B008
+    db: DbClient = Depends(get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Return the full evidence row for one governed write."""
+    row = await db.fetch_one(
+        """SELECT id, tenant_id, principal_id, tool_name, resource, operation,
+                  before_state, after_state, approval_id, trace_id, session_id,
+                  idempotency_key, success, error, rolled_back,
+                  rollback_reason, created_at
+           FROM harness.write_audit
+           WHERE id = :p0 AND tenant_id = :p1""",
+        audit_id,
+        principal.tenant_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="write audit not found")
+    return dict(row)
+
+
+@router.post("/write-audits/{audit_id}/rollback", tags=["admin"])
+async def rollback_write_audit(
+    audit_id: UUID,
+    body: WriteRollbackRequest,
+    request: Request,
+    principal: Principal = Depends(require_admin),  # noqa: B008
+) -> dict[str, Any]:
+    """Run and verify the connector-specific compensating transaction."""
+    from eaos.core.errors import NotFoundError
+
+    pipeline = _component(request, "write_pipeline")
+    try:
+        outcome = await pipeline.rollback_audit(audit_id, principal.tenant_id, body.reason)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "audit_id": str(audit_id),
+        "success": outcome.success,
+        "rolled_back": outcome.rolled_back,
+        "rollback_error": outcome.rollback_error,
+        "approval_id": str(outcome.approval_id) if outcome.approval_id else None,
+    }
+
+
 @router.get("/audit-logs/export", tags=["admin"])
 async def export_audit_logs(
     user_id: UUID | None = Query(default=None),  # noqa: B008
@@ -291,9 +345,7 @@ async def export_audit_logs(
     principal: Principal = Depends(require_admin),  # noqa: B008
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> StreamingResponse:
-    where_sql, params = _audit_where(
-        principal.tenant_id, user_id, action, start_time, end_time
-    )
+    where_sql, params = _audit_where(principal.tenant_id, user_id, action, start_time, end_time)
     rows = await db.fetch(
         f"SELECT id, actor_type, actor_id, action, resource_type, "
         f"resource_id, detail, ip_address::text AS ip_address, created_at "
@@ -304,24 +356,35 @@ async def export_audit_logs(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "id", "timestamp", "actor_type", "actor_id", "action",
-        "resource_type", "resource_id", "ip_address", "detail",
-    ])
+    writer.writerow(
+        [
+            "id",
+            "timestamp",
+            "actor_type",
+            "actor_id",
+            "action",
+            "resource_type",
+            "resource_id",
+            "ip_address",
+            "detail",
+        ]
+    )
     for row in rows or []:
         ts = row["created_at"]
         ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-        writer.writerow([
-            row["id"],
-            ts_str,
-            row["actor_type"],
-            str(row["actor_id"]),
-            row["action"],
-            row["resource_type"],
-            str(row["resource_id"]) if row["resource_id"] else "",
-            row["ip_address"] or "",
-            str(row["detail"]) if row["detail"] else "",
-        ])
+        writer.writerow(
+            [
+                row["id"],
+                ts_str,
+                row["actor_type"],
+                str(row["actor_id"]),
+                row["action"],
+                row["resource_type"],
+                str(row["resource_id"]) if row["resource_id"] else "",
+                row["ip_address"] or "",
+                str(row["detail"]) if row["detail"] else "",
+            ]
+        )
 
     output.seek(0)
     return StreamingResponse(
@@ -432,9 +495,7 @@ async def list_approvals(
     principal: Principal = Depends(require_admin),  # noqa: B008
 ) -> ApprovalListResponse:
     gate = _component(request, "approval_gate")
-    items = await gate.list_all(
-        principal.tenant_id, status=status, limit=limit, offset=offset
-    )
+    items = await gate.list_all(principal.tenant_id, status=status, limit=limit, offset=offset)
     total = await gate.count(principal.tenant_id, status=status)
     return ApprovalListResponse(
         items=[asdict(a) for a in items],
@@ -450,8 +511,15 @@ async def approve_request(
     request: Request,
     principal: Principal = Depends(require_admin),  # noqa: B008
 ) -> dict[str, str]:
+    from eaos.core.errors import NotFoundError, PermissionDeniedError
+
     gate = _component(request, "approval_gate")
-    await gate.approve(approval_id, principal.user_id)
+    try:
+        await gate.approve(approval_id, principal.user_id, principal.tenant_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return {"id": str(approval_id), "status": "approved"}
 
 
@@ -463,7 +531,7 @@ async def reject_request(
     principal: Principal = Depends(require_admin),  # noqa: B008
 ) -> dict[str, str]:
     gate = _component(request, "approval_gate")
-    await gate.reject(approval_id, principal.user_id, body.reason or "")
+    await gate.reject(approval_id, principal.user_id, body.reason or "", principal.tenant_id)
     return {"id": str(approval_id), "status": "rejected"}
 
 

@@ -214,7 +214,10 @@ export default function ChatPage() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto">
-          <MessageList messages={chat.messages} onApprove={chat.resume} />
+          <MessageList
+            messages={chat.messages}
+            onResumeApproval={chat.resume}
+          />
         </div>
 
         {/* Input */}

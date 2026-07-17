@@ -42,7 +42,14 @@ interface ApprovalListResponse {
   offset: number;
 }
 
-type StatusFilter = "all" | "pending" | "approved" | "rejected";
+type StatusFilter =
+  | "all"
+  | "pending"
+  | "approved"
+  | "executing"
+  | "consumed"
+  | "rejected"
+  | "expired";
 
 const PAGE_SIZE = 10;
 
@@ -50,7 +57,10 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "pending", label: "待审批" },
   { key: "approved", label: "已批准" },
+  { key: "executing", label: "执行中" },
+  { key: "consumed", label: "已执行" },
   { key: "rejected", label: "已驳回" },
+  { key: "expired", label: "已过期" },
 ];
 
 const REASON_LABELS: Record<string, string> = {
@@ -75,13 +85,19 @@ const OPERATION_LABELS: Record<string, string> = {
 function statusLabel(status: string): string {
   if (status === "pending") return "待审批";
   if (status === "approved") return "已批准";
+  if (status === "executing") return "执行中";
+  if (status === "consumed") return "已执行";
   if (status === "rejected") return "已驳回";
+  if (status === "expired") return "已过期";
   return status;
 }
 
 function statusBadgeClass(status: string): string {
   if (status === "pending") return "bg-warning/10 text-warning";
   if (status === "approved") return "bg-success/10 text-success";
+  if (status === "executing") return "bg-accent/10 text-accent";
+  if (status === "consumed") return "bg-success/10 text-success";
+  if (status === "expired") return "bg-subtle text-secondary";
   return "bg-danger/10 text-danger";
 }
 

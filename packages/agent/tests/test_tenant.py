@@ -39,39 +39,46 @@ class TestResolveThreadId:
         )
         assert thread_id == f"tenant:{tenant_id}:agent:{agent_id}:session:{session_id}"
 
-    async def test_personal_without_session_uses_default(
+    async def test_personal_without_session_uses_fresh_fallback(
         self, manager: PgTenantManager
     ) -> None:
         tenant_id = uuid4()
         agent_id = uuid4()
-        thread_id = await manager.resolve_thread_id(
-            tenant_id, agent_id, None, AgentScope.PERSONAL
-        )
-        assert thread_id == f"tenant:{tenant_id}:agent:{agent_id}:session:default"
+        first = await manager.resolve_thread_id(tenant_id, agent_id, None, AgentScope.PERSONAL)
+        second = await manager.resolve_thread_id(tenant_id, agent_id, None, AgentScope.PERSONAL)
+        prefix = f"tenant:{tenant_id}:agent:{agent_id}:session:"
+        assert first.startswith(prefix)
+        assert second.startswith(prefix)
+        assert first != second
 
-    async def test_department_uses_shared(self, manager: PgTenantManager) -> None:
+    async def test_department_keeps_session_isolation(self, manager: PgTenantManager) -> None:
         tenant_id = uuid4()
         agent_id = uuid4()
+        session_id = uuid4()
         thread_id = await manager.resolve_thread_id(
+            tenant_id, agent_id, session_id, AgentScope.DEPARTMENT
+        )
+        assert thread_id == f"tenant:{tenant_id}:agent:{agent_id}:session:{session_id}"
+
+    async def test_company_without_session_uses_fresh_fallback(
+        self, manager: PgTenantManager
+    ) -> None:
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        first = await manager.resolve_thread_id(tenant_id, agent_id, None, AgentScope.COMPANY)
+        second = await manager.resolve_thread_id(tenant_id, agent_id, None, AgentScope.COMPANY)
+        assert first != second
+
+    async def test_department_sessions_do_not_share_checkpoint(
+        self, manager: PgTenantManager
+    ) -> None:
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        first = await manager.resolve_thread_id(tenant_id, agent_id, uuid4(), AgentScope.DEPARTMENT)
+        second = await manager.resolve_thread_id(
             tenant_id, agent_id, uuid4(), AgentScope.DEPARTMENT
         )
-        assert thread_id == f"tenant:{tenant_id}:agent:{agent_id}:session:shared"
-
-    async def test_company_uses_shared(self, manager: PgTenantManager) -> None:
-        tenant_id = uuid4()
-        agent_id = uuid4()
-        thread_id = await manager.resolve_thread_id(
-            tenant_id, agent_id, None, AgentScope.COMPANY
-        )
-        assert thread_id == f"tenant:{tenant_id}:agent:{agent_id}:session:shared"
-
-    async def test_department_ignores_session_id(self, manager: PgTenantManager) -> None:
-        tenant_id = uuid4()
-        agent_id = uuid4()
-        thread_id = await manager.resolve_thread_id(
-            tenant_id, agent_id, uuid4(), AgentScope.DEPARTMENT
-        )
-        assert ":session:shared" in thread_id
+        assert first != second
 
 
 class TestCreateTenant:

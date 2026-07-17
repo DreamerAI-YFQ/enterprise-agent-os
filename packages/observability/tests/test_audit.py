@@ -110,8 +110,8 @@ class TestAuditLog:
         logger = AuditLogger(db)
         await logger.log(_entry(success=False, error="constraint violation"))
         call = db.execute.call_args
-        success_arg = call.args[11]  # success is arg index 11
-        error_arg = call.args[12]  # error is arg index 12
+        success_arg = call.args[13]
+        error_arg = call.args[14]
         assert success_arg is False
         assert error_arg == "constraint violation"
 

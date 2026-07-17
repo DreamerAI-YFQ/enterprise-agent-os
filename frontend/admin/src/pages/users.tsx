@@ -76,11 +76,12 @@ export default function UsersPage() {
   const [createForm, setCreateForm] = useState({
     email: "",
     name: "",
+    password: "",
     role: "employee",
     status: "active",
     departmentIds: [] as string[],
   });
-  const [editForm, setEditForm] = useState({ name: "", role: "", status: "" });
+  const [editForm, setEditForm] = useState({ name: "", role: "", status: "", password: "" });
 
   const query = useQuery({
     queryKey: ["admin", "users"],
@@ -95,12 +96,19 @@ export default function UsersPage() {
     mutationFn: async (input: {
       email: string;
       name: string;
+      password: string;
       role: string;
       status: string;
       departmentIds: string[];
     }) => {
       const { data, error } = await apiClient.POST("/admin/users", {
-        body: { email: input.email, name: input.name, role: input.role, status: input.status } as never,
+        body: {
+          email: input.email,
+          name: input.name,
+          password: input.password,
+          role: input.role,
+          status: input.status,
+        } as never,
       });
       if (error) throw new Error("创建失败");
       const userId = (data as never as User)?.id;
@@ -119,7 +127,14 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       toast.show({ title: "邀请成功", description: "用户已添加", variant: "success" });
       setShowCreate(false);
-      setCreateForm({ email: "", name: "", role: "employee", status: "active", departmentIds: [] });
+      setCreateForm({
+        email: "",
+        name: "",
+        password: "",
+        role: "employee",
+        status: "active",
+        departmentIds: [],
+      });
     },
     onError: () => {
       toast.show({ title: "创建失败", description: "邮箱可能已存在", variant: "danger" });
@@ -127,7 +142,10 @@ export default function UsersPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (input: { userId: string; body: { name: string; role: string; status: string } }) => {
+    mutationFn: async (input: {
+      userId: string;
+      body: { name: string; role: string; status: string; password?: string };
+    }) => {
       const { error } = await apiClient.PUT("/admin/users/{user_id}", {
         params: { path: { user_id: input.userId } },
         body: input.body as never,
@@ -181,26 +199,39 @@ export default function UsersPage() {
 
   const handleEdit = (u: User) => {
     setEditing(u);
-    setEditForm({ name: u.name, role: u.role, status: u.status });
+    setEditForm({ name: u.name, role: u.role, status: u.status, password: "" });
   };
 
   const handleSaveEdit = () => {
     if (!editing) return;
+    if (editForm.password && editForm.password.length < 8) {
+      toast.show({ title: "新密码至少需要 8 个字符", variant: "danger" });
+      return;
+    }
     updateMutation.mutate({
       userId: editing.id,
-      body: { name: editForm.name, role: editForm.role, status: editForm.status },
+      body: {
+        name: editForm.name,
+        role: editForm.role,
+        status: editForm.status,
+        ...(editForm.password ? { password: editForm.password } : {}),
+      },
     });
   };
 
   const handleCreate = () => {
-    if (!createForm.email.trim() || !createForm.name.trim()) {
-      toast.show({ title: "请填写邮箱和姓名", variant: "danger" });
+    if (!createForm.email.trim() || !createForm.name.trim() || !createForm.password) {
+      toast.show({ title: "请填写邮箱、姓名和初始密码", variant: "danger" });
+      return;
+    }
+    if (createForm.password.length < 8) {
+      toast.show({ title: "初始密码至少需要 8 个字符", variant: "danger" });
       return;
     }
     createMutation.mutate(createForm);
   };
 
-  const allUsers = query.data ?? [];
+  const allUsers = useMemo(() => query.data ?? [], [query.data]);
   const filtered = useMemo(() => allUsers.filter((u) => {
     const matchesSearch =
       !search ||
@@ -431,6 +462,17 @@ export default function UsersPage() {
                   className="mt-1"
                 />
               </div>
+              <div>
+                <label className="text-xs text-tertiary">重置密码（留空则不修改）</label>
+                <Input
+                  type="password"
+                  value={editForm.password}
+                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                  autoComplete="new-password"
+                  minLength={8}
+                  className="mt-1"
+                />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-tertiary">角色</label>
@@ -521,6 +563,7 @@ function CreateUserForm({
   form: {
     email: string;
     name: string;
+    password: string;
     role: string;
     status: string;
     departmentIds: string[];
@@ -563,6 +606,18 @@ function CreateUserForm({
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
           placeholder="张三"
+          className="mt-1"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-tertiary">初始密码</label>
+        <Input
+          type="password"
+          value={form.password}
+          onChange={(e) => setForm({ ...form, password: e.target.value })}
+          autoComplete="new-password"
+          minLength={8}
+          placeholder="为用户设置初始密码"
           className="mt-1"
         />
       </div>

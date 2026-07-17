@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from eaos.core.errors import EvolutionError, NotFoundError
+from eaos.core.errors import EvolutionError, NotFoundError, PermissionDeniedError
 from eaos.harness.context import GuardContext
 from eaos.harness.evolution.approval import ApprovalGateImpl, ApprovalRequest
 from eaos.harness.evolution.governor import (
@@ -101,9 +101,7 @@ class TestRequestApproval:
         gate = ApprovalGateImpl(db)
         ctx = _ctx()
 
-        approval_id = await gate.request_approval(
-            ctx, skill_id=uuid4(), reason="high_risk"
-        )
+        approval_id = await gate.request_approval(ctx, skill_id=uuid4(), reason="high_risk")
 
         assert isinstance(approval_id, UUID)
         assert len(db.executed) == 1
@@ -133,13 +131,122 @@ class TestRequestApproval:
         db = FakeApprovalDb()
         gate = ApprovalGateImpl(db)
 
-        approval_id = await gate.request_approval(
-            _ctx(), skill_id=None, reason="cost_threshold"
-        )
+        approval_id = await gate.request_approval(_ctx(), skill_id=None, reason="cost_threshold")
 
         assert isinstance(approval_id, UUID)
         _, params = db.executed[0]
         assert params[3] is None  # skill_id param
+
+    async def test_reuses_same_unfinished_idempotent_approval(self) -> None:
+        existing_id = uuid4()
+        db = FakeApprovalDb(one_row={"id": existing_id})
+        gate = ApprovalGateImpl(db)
+
+        approval_id = await gate.request_approval(
+            _ctx(),
+            skill_id=None,
+            reason="high_risk_write",
+            tool_name="erp_create_sales_order",
+            resource="orders",
+            operation="create",
+            risk_level="high",
+            intent_data={"idempotency_key": "idem-1", "data": {"quantity": 1}},
+        )
+
+        assert approval_id == existing_id
+        assert db.executed == []
+
+
+class TestApprovalExecutionClaim:
+    async def test_claim_binds_and_reserves_approved_ticket(self) -> None:
+        from unittest.mock import AsyncMock
+
+        approval_id = uuid4()
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        session_id = uuid4()
+        requested_by = uuid4()
+        db = AsyncMock()
+        db.fetch_one.side_effect = [
+            {
+                "id": approval_id,
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "requested_by": requested_by,
+                "tool_name": "erp_create_sales_order",
+                "resource": "orders",
+                "operation": "create",
+                "status": "approved",
+                "intent_data": {"idempotency_key": "idem-1"},
+            },
+            {"status": "executing"},
+        ]
+        gate = ApprovalGateImpl(db)
+
+        status = await gate.claim_for_execution(
+            approval_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            requested_by=requested_by,
+            tool_name="erp_create_sales_order",
+            resource="orders",
+            operation="create",
+            idempotency_key="idem-1",
+        )
+
+        assert status == "executing"
+        assert "status = 'executing'" in db.fetch_one.call_args_list[1].args[0]
+
+    async def test_claim_rejects_approval_for_different_intent(self) -> None:
+        from unittest.mock import AsyncMock
+
+        approval_id = uuid4()
+        tenant_id = uuid4()
+        agent_id = uuid4()
+        session_id = uuid4()
+        requested_by = uuid4()
+        db = AsyncMock()
+        db.fetch_one.return_value = {
+            "id": approval_id,
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "requested_by": requested_by,
+            "tool_name": "erp_create_sales_order",
+            "resource": "orders",
+            "operation": "create",
+            "status": "approved",
+            "intent_data": {"idempotency_key": "approved-intent"},
+        }
+        gate = ApprovalGateImpl(db)
+
+        with pytest.raises(PermissionDeniedError, match="not bound"):
+            await gate.claim_for_execution(
+                approval_id,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                requested_by=requested_by,
+                tool_name="erp_create_sales_order",
+                resource="orders",
+                operation="create",
+                idempotency_key="different-intent",
+            )
+
+    async def test_consumed_only_from_executing(self) -> None:
+        db = FakeApprovalDb()
+        gate = ApprovalGateImpl(db)
+        approval_id = uuid4()
+        tenant_id = uuid4()
+
+        await gate.consume_after_execution(approval_id, tenant_id)
+
+        sql, params = db.executed[0]
+        assert "status = 'consumed'" in sql
+        assert "status = 'executing'" in sql
+        assert params == (approval_id, tenant_id)
 
 
 class TestCheckApproval:
@@ -161,10 +268,10 @@ class TestCheckApproval:
 
 class TestApprove:
     async def test_updates_status_to_approved(self) -> None:
-        db = FakeApprovalDb()
-        gate = ApprovalGateImpl(db)
         approval_id = uuid4()
         approver = uuid4()
+        db = FakeApprovalDb(one_row={"requested_by": uuid4()})
+        gate = ApprovalGateImpl(db)
 
         await gate.approve(approval_id, approver)
 
@@ -174,6 +281,16 @@ class TestApprove:
         assert "status = 'approved'" in sql
         assert params[0] == approver  # decided_by
         assert params[2] == approval_id
+
+    async def test_requester_cannot_approve_own_write(self) -> None:
+        requester = uuid4()
+        db = FakeApprovalDb(one_row={"requested_by": requester})
+        gate = ApprovalGateImpl(db)
+
+        with pytest.raises(PermissionDeniedError, match="separation of duties"):
+            await gate.approve(uuid4(), requester)
+
+        assert db.executed == []
 
 
 class TestReject:
@@ -290,18 +407,14 @@ class TestAdvanceStage:
             await gov.advance_stage(uuid4(), _ctx())
 
     async def test_raises_when_status_not_passed(self) -> None:
-        db = FakeEvolutionDb(
-            row={"stage": "safety_benchmark", "stage_status": "pending"}
-        )
+        db = FakeEvolutionDb(row={"stage": "safety_benchmark", "stage_status": "pending"})
         gov = EvolutionGovernorImpl(db)
 
         with pytest.raises(EvolutionError, match="cannot advance"):
             await gov.advance_stage(uuid4(), _ctx())
 
     async def test_advances_to_perf_compare_after_safety(self) -> None:
-        db = FakeEvolutionDb(
-            row={"stage": "safety_benchmark", "stage_status": "passed"}
-        )
+        db = FakeEvolutionDb(row={"stage": "safety_benchmark", "stage_status": "passed"})
         gov = EvolutionGovernorImpl(db)
         strategy_id = uuid4()
 
@@ -315,9 +428,7 @@ class TestAdvanceStage:
         assert params[1] == "pending"
 
     async def test_advances_to_shadow_after_perf(self) -> None:
-        db = FakeEvolutionDb(
-            row={"stage": "perf_compare", "stage_status": "passed"}
-        )
+        db = FakeEvolutionDb(row={"stage": "perf_compare", "stage_status": "passed"})
         gov = EvolutionGovernorImpl(db)
 
         await gov.advance_stage(uuid4(), _ctx())
@@ -326,9 +437,7 @@ class TestAdvanceStage:
         assert params[0] == "shadow"
 
     async def test_advances_to_approval_after_shadow(self) -> None:
-        db = FakeEvolutionDb(
-            row={"stage": "shadow", "stage_status": "passed"}
-        )
+        db = FakeEvolutionDb(row={"stage": "shadow", "stage_status": "passed"})
         gov = EvolutionGovernorImpl(db)
 
         await gov.advance_stage(uuid4(), _ctx())
@@ -337,9 +446,7 @@ class TestAdvanceStage:
         assert params[0] == "approval"
 
     async def test_no_advance_when_already_at_full(self) -> None:
-        db = FakeEvolutionDb(
-            row={"stage": "full", "stage_status": "passed"}
-        )
+        db = FakeEvolutionDb(row={"stage": "full", "stage_status": "passed"})
         gov = EvolutionGovernorImpl(db)
 
         await gov.advance_stage(uuid4(), _ctx())
@@ -362,15 +469,11 @@ class _FakeGuardrail:
         self.details = details or {"total": 5, "passed": 5}
         self.called_with: list[tuple[Any, ...]] = []
 
-    async def safety_benchmark(
-        self, strategy_id: Any, tenant_id: Any = None
-    ) -> Any:
+    async def safety_benchmark(self, strategy_id: Any, tenant_id: Any = None) -> Any:
         self.called_with.append(("safety", strategy_id, tenant_id))
         return self
 
-    async def perf_compare(
-        self, strategy_id: Any, baseline_metrics: Any = None
-    ) -> Any:
+    async def perf_compare(self, strategy_id: Any, baseline_metrics: Any = None) -> Any:
         self.called_with.append(("perf", strategy_id, baseline_metrics))
         return self
 

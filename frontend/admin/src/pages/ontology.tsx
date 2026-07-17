@@ -103,7 +103,7 @@ export default function OntologyPage() {
     },
   });
 
-  const terms = query.data ?? [];
+  const terms = useMemo(() => query.data ?? [], [query.data]);
   const filteredTerms = useMemo(() => {
     if (typeFilter === "all") return terms;
     return terms.filter((t) => t.node_type === typeFilter);

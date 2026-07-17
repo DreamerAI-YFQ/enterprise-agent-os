@@ -31,6 +31,8 @@ class AuditEntry:
     after: dict[str, Any] | None = None
     approval_id: UUID | None = None
     trace_id: UUID | None = None
+    session_id: UUID | None = None
+    idempotency_key: str | None = None
     error: str | None = None
     id: UUID | None = None
     created_at: datetime | None = None
@@ -65,18 +67,22 @@ class AuditLogger:
         await self._db.execute(
             "INSERT INTO harness.write_audit "
             "(id, tenant_id, principal_id, tool_name, resource, operation, "
-            "before_state, after_state, approval_id, trace_id, success, error) "
-            "VALUES (:p0, :p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10, :p11)",
+            "before_state, after_state, approval_id, trace_id, session_id, "
+            "idempotency_key, success, error) "
+            "VALUES (:p0, :p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, "
+            ":p10, :p11, :p12, :p13)",
             entry_id,
             entry.tenant_id,
             entry.principal_id,
             entry.tool_name,
             entry.resource,
             entry.operation,
-            json.dumps(entry.before) if entry.before is not None else None,
-            json.dumps(entry.after) if entry.after is not None else None,
+            json.dumps(entry.before, default=str) if entry.before is not None else None,
+            json.dumps(entry.after, default=str) if entry.after is not None else None,
             entry.approval_id,
             entry.trace_id,
+            entry.session_id,
+            entry.idempotency_key,
             entry.success,
             entry.error,
         )
@@ -107,7 +113,7 @@ class AuditLogger:
         sql = (
             "SELECT id, tenant_id, principal_id, tool_name, resource, operation, "
             "before_state, after_state, approval_id, trace_id, success, error, "
-            "rolled_back, rollback_reason, created_at "
+            "session_id, idempotency_key, rolled_back, rollback_reason, created_at "
             "FROM harness.write_audit WHERE tenant_id = :p0"
         )
         if f.principal_id is not None:
@@ -134,7 +140,7 @@ class AuditLogger:
         row = await self._db.fetch_one(
             "SELECT id, tenant_id, principal_id, tool_name, resource, operation, "
             "before_state, after_state, approval_id, trace_id, success, error, "
-            "rolled_back, rollback_reason, created_at "
+            "session_id, idempotency_key, rolled_back, rollback_reason, created_at "
             "FROM harness.write_audit WHERE id = :p0",
             entry_id,
         )
@@ -155,6 +161,8 @@ class AuditLogger:
             after=row.get("after_state"),
             approval_id=row.get("approval_id"),
             trace_id=row.get("trace_id"),
+            session_id=row.get("session_id"),
+            idempotency_key=row.get("idempotency_key"),
             error=row.get("error"),
             rolled_back=row.get("rolled_back", False),
             rollback_reason=row.get("rollback_reason"),

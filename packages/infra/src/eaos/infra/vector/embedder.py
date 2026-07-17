@@ -10,7 +10,7 @@ is async throughout.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import openai
 from eaos.core.errors import LLMError
@@ -29,6 +29,7 @@ class OpenAIEmbedder:
     def __init__(self, config: EmbeddingConfig) -> None:
         self._config = config
         self._client: openai.AsyncOpenAI | None = None
+        self._supports_dimensions: bool | None = None
 
     @property
     def dimension(self) -> int:
@@ -50,67 +51,59 @@ class OpenAIEmbedder:
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text. Returns a float vector of length `dimension`."""
-        client = self._get_client()
         try:
-            try:
-                response = await client.embeddings.create(
-                    input=text,
-                    model=self._config.model,
-                    dimensions=self._config.dimensions,
-                )
-            except openai.BadRequestError as exc:
-                # Some providers (e.g. SiliconFlow BAAI/bge-m3) don't accept
-                # the dimensions param. Retry without it, using a fresh client
-                # to avoid connection-state issues after the 400 response.
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Embedding BadRequest with dimensions=%s for model=%s: %s. "
-                    "Retrying without dimensions.",
-                    self._config.dimensions,
-                    self._config.model,
-                    exc,
-                )
-                self._client = None
-                client = self._get_client()
-                response = await client.embeddings.create(
-                    input=text,
-                    model=self._config.model,
-                )
+            response = await self._create(text)
         except openai.OpenAIError as exc:
             raise LLMError(f"embedding call failed: {exc}") from exc
-        return response.data[0].embedding
+        return cast("list[float]", response.data[0].embedding)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed multiple texts in one API call. Order preserved."""
         if not texts:
             return []
-        client = self._get_client()
         try:
-            try:
-                response = await client.embeddings.create(
-                    input=texts,
-                    model=self._config.model,
-                    dimensions=self._config.dimensions,
-                )
-            except openai.BadRequestError as exc:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Embedding batch BadRequest with dimensions=%s for model=%s: %s. "
-                    "Retrying without dimensions.",
-                    self._config.dimensions,
-                    self._config.model,
-                    exc,
-                )
-                self._client = None
-                client = self._get_client()
-                response = await client.embeddings.create(
-                    input=texts,
-                    model=self._config.model,
-                )
+            response = await self._create(texts)
         except openai.OpenAIError as exc:
             raise LLMError(f"embedding batch call failed: {exc}") from exc
         # API returns data sorted by index; sort defensively to preserve order.
         ordered = sorted(response.data, key=lambda d: d.index)
         return [item.embedding for item in ordered]
+
+    async def _create(self, input_value: str | list[str]) -> Any:
+        """Call the provider and remember whether it accepts ``dimensions``."""
+        client = self._get_client()
+        kwargs: dict[str, Any] = {
+            "input": input_value,
+            "model": self._config.model,
+        }
+        if self._supports_dimensions is not False:
+            kwargs["dimensions"] = self._config.dimensions
+        try:
+            response = await client.embeddings.create(**kwargs)
+        except openai.BadRequestError:
+            if "dimensions" not in kwargs:
+                raise
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Embedding provider rejected dimensions=%s for model=%s; "
+                "retrying once without dimensions and caching that capability.",
+                self._config.dimensions,
+                self._config.model,
+            )
+            self._supports_dimensions = False
+            self._client = None
+            client = self._get_client()
+            return await client.embeddings.create(
+                input=input_value,
+                model=self._config.model,
+            )
+        else:
+            # A successful request only proves ``dimensions`` support when
+            # that argument was actually sent.  Once a provider has rejected
+            # it, later fallback successes must not re-enable the argument and
+            # cause every other embedding request to repeat the same 400.
+            if "dimensions" in kwargs:
+                self._supports_dimensions = True
+            return response

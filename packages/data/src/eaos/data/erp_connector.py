@@ -8,7 +8,7 @@ access_mode enforcement. Fixes gaps #1, #6, #7, #8.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from eaos.data.connector import (
     DataResource,
@@ -66,6 +66,16 @@ _ERP_ALLOWED_COLUMNS: dict[str, set[str]] = {
     "inventory": {"product_id", "warehouse", "quantity", "safety_stock"},
 }
 
+# Read-only metadata columns that exist on each concrete ERP table.  These are
+# deliberately resource-specific: allowing a generic identifier string would
+# turn ``SELECT fields`` / ``ORDER BY`` back into SQL text injection sinks.
+_ERP_READ_METADATA_COLUMNS: dict[str, set[str]] = {
+    "products": {"id", "tenant_id", "created_at"},
+    "customers": {"id", "tenant_id", "created_at"},
+    "orders": {"id", "tenant_id", "created_at"},
+    "inventory": {"id", "tenant_id", "updated_at"},
+}
+
 
 class ErpConnector:
     """DataConnector for mock ERP tables in the ``erp`` schema."""
@@ -89,19 +99,41 @@ class ErpConnector:
     ) -> DataResult:
         if resource not in self._ALLOWED_RESOURCES:
             return DataResult(rows=[], total=0)
-        fields = ", ".join(query.fields) if query.fields else "*"
+        readable_columns = self._ALLOWED_COLUMNS.get(resource, set()) | (
+            _ERP_READ_METADATA_COLUMNS.get(resource, set())
+        )
+        if query.fields:
+            invalid_fields = [field for field in query.fields if field not in readable_columns]
+            if invalid_fields:
+                raise ValueError(
+                    f"disallowed read field(s) for {resource}: " + ", ".join(invalid_fields)
+                )
+            fields = ", ".join(query.fields)
+        else:
+            # The wildcard is a connector-owned literal, never caller input.
+            fields = "*"
         sql = f"SELECT {fields} FROM {self.SCHEMA}.{resource}"
         params: list[Any] = [tenant_id]
         where_clauses: list[str] = ["tenant_id = :p0"]
         for col, val in query.filters.items():
-            if col not in self._ALLOWED_COLUMNS.get(resource, set()):
+            allowed_filters = self._ALLOWED_COLUMNS.get(resource, set()) | {"id"}
+            if col not in allowed_filters:
                 continue
             idx = len(params)
             where_clauses.append(f"{col} = :p{idx}")
             params.append(val)
         sql += " WHERE " + " AND ".join(where_clauses)
         if query.order_by:
-            order_parts = [f"{col} {direction}" for col, direction in query.order_by]
+            order_parts: list[str] = []
+            for col, raw_direction in query.order_by:
+                if col not in readable_columns:
+                    raise ValueError(f"disallowed order_by field for {resource}: {col}")
+                direction = str(raw_direction).upper()
+                if direction not in {"ASC", "DESC"}:
+                    raise ValueError(
+                        f"disallowed order_by direction for {resource}: {raw_direction}"
+                    )
+                order_parts.append(f"{col} {direction}")
             sql += " ORDER BY " + ", ".join(order_parts)
         sql += f" LIMIT :p{len(params)} OFFSET :p{len(params) + 1}"
         params.extend([query.limit, query.offset])
@@ -110,7 +142,8 @@ class ErpConnector:
         count_params: list[Any] = [tenant_id]
         # Re-add filter clauses (skip tenant_id, already in count_sql)
         for col, val in query.filters.items():
-            if col not in self._ALLOWED_COLUMNS.get(resource, set()):
+            allowed_filters = self._ALLOWED_COLUMNS.get(resource, set()) | {"id"}
+            if col not in allowed_filters:
                 continue
             idx = len(count_params)
             count_sql += f" AND {col} = :p{idx}"
@@ -157,16 +190,16 @@ class ErpConnector:
         if "customer_code" in data and "customer_id" not in data:
             code = data.pop("customer_code")
             row = await self._db.fetch_one(
-                "SELECT id FROM erp.customers "
-                "WHERE tenant_id = :p0 AND code = :p1 LIMIT 1",
-                tenant_id, code,
+                "SELECT id FROM erp.customers WHERE tenant_id = :p0 AND code = :p1 LIMIT 1",
+                tenant_id,
+                code,
             )
             if row is None:
                 # Fallback: try LIKE match (e.g. CUS-001 → CUS-TECH-0001)
                 row = await self._db.fetch_one(
-                    "SELECT id FROM erp.customers "
-                    "WHERE tenant_id = :p0 AND code LIKE :p1 LIMIT 1",
-                    tenant_id, f"%{code}%",
+                    "SELECT id FROM erp.customers WHERE tenant_id = :p0 AND code LIKE :p1 LIMIT 1",
+                    tenant_id,
+                    f"%{code}%",
                 )
             if row is None:
                 data["customer_id"] = None
@@ -180,14 +213,16 @@ class ErpConnector:
             row = await self._db.fetch_one(
                 "SELECT id, unit_price FROM erp.products "
                 "WHERE tenant_id = :p0 AND sku = :p1 LIMIT 1",
-                tenant_id, sku,
+                tenant_id,
+                sku,
             )
             if row is None:
                 # Fallback: try LIKE match (e.g. PRD-001 → PRD-ELEC-001)
                 row = await self._db.fetch_one(
                     "SELECT id, unit_price FROM erp.products "
                     "WHERE tenant_id = :p0 AND sku LIKE :p1 LIMIT 1",
-                    tenant_id, f"%{sku}%",
+                    tenant_id,
+                    f"%{sku}%",
                 )
             if row is None:
                 data["product_id"] = None
@@ -203,8 +238,8 @@ class ErpConnector:
 
         # Auto-generate order_no
         if "order_no" not in data:
-            import time
-            data["order_no"] = f"ORD-{int(time.time())}-{data.get('customer_id', 'x')[-4:]}"
+            record_token = str(operation.record_id or uuid4()).replace("-", "")
+            data["order_no"] = f"ORD-{record_token.upper()}"
 
         # Compute amount = quantity * unit_price
         if "amount" not in data:
@@ -220,6 +255,7 @@ class ErpConnector:
             data["status"] = "pending"
         if "order_date" not in data:
             from datetime import date
+
             data["order_date"] = date.today()
 
     async def write(
@@ -234,14 +270,22 @@ class ErpConnector:
         if res_spec is None:
             return WriteResult(success=False, error=f"unknown resource: {resource}")
         if res_spec.access_mode == "read":
-            return WriteResult(
-                success=False, error=f"resource {resource} is read-only"
-            )
+            return WriteResult(success=False, error=f"resource {resource} is read-only")
+
+        # Generate the record id in the application so the post-write snapshot
+        # can be fetched deterministically and later used for compensation.
+        if operation.operation == "create" and operation.record_id is None:
+            from dataclasses import replace
+
+            operation = replace(operation, record_id=str(uuid4()))
 
         # C13/Fix-2: Resolve human-readable args to DB column values.
         # The LLM passes customer_code/product_sku; the DB needs UUIDs.
         # Also auto-generates order_no, computes amount, sets defaults.
         await self._resolve_write_args(tenant_id, resource, operation)
+        business_error = operation.data.pop("_error", None)
+        if business_error:
+            return WriteResult(success=False, error=str(business_error))
 
         # 2. before snapshot for update/delete (supplies rollback context)
         before: dict[str, Any] | None = None
@@ -287,20 +331,24 @@ class ErpConnector:
             # C13/Fix-B2: Filter out disallowed columns instead of rejecting
             # the entire request. LLM-generated data may include extra fields
             # (e.g., total_amount, notes) that aren't in the whitelist.
-            filtered_data = {
-                k: v for k, v in operation.data.items() if k in allowed_cols
+            dangerous_columns = {
+                key for key in operation.data if key == "id" or not key.replace("_", "").isalnum()
             }
+            if dangerous_columns:
+                raise ValueError("disallowed column in create data")
+            filtered_data = {k: v for k, v in operation.data.items() if k in allowed_cols}
             if not filtered_data:
                 raise ValueError("create requires at least one allowed column")
             cols = list(filtered_data.keys())
-            # tenant_id always first param; then data values
-            col_list = ", ".join(["tenant_id"] + cols)
-            placeholders = ", ".join(f":p{i}" for i in range(len(cols) + 1))
-            sql = (
-                f"INSERT INTO {self.SCHEMA}.{resource} ({col_list}) "
-                f"VALUES ({placeholders})"
-            )
-            params: list[Any] = [tenant_id, *filtered_data.values()]
+            base_cols = ["tenant_id"]
+            params: list[Any] = [tenant_id]
+            if operation.record_id is not None:
+                base_cols.append("id")
+                params.append(operation.record_id)
+            col_list = ", ".join(base_cols + cols)
+            placeholders = ", ".join(f":p{i}" for i in range(len(params) + len(cols)))
+            sql = f"INSERT INTO {self.SCHEMA}.{resource} ({col_list}) VALUES ({placeholders})"
+            params.extend(filtered_data.values())
             return sql, params
 
         if operation.operation == "update":
@@ -326,10 +374,7 @@ class ErpConnector:
         if operation.operation == "delete":
             if not operation.record_id:
                 raise ValueError("delete requires record_id")
-            sql = (
-                f"DELETE FROM {self.SCHEMA}.{resource} "
-                f"WHERE tenant_id = :p0 AND id = :p1"
-            )
+            sql = f"DELETE FROM {self.SCHEMA}.{resource} WHERE tenant_id = :p0 AND id = :p1"
             return sql, [tenant_id, operation.record_id]
 
         raise ValueError(f"unknown operation: {operation.operation}")
@@ -342,10 +387,7 @@ class ErpConnector:
     ) -> dict[str, Any] | None:
         if record_id is None:
             return None
-        sql = (
-            f"SELECT * FROM {self.SCHEMA}.{resource} "
-            f"WHERE tenant_id = :p0 AND id = :p1"
-        )
+        sql = f"SELECT * FROM {self.SCHEMA}.{resource} WHERE tenant_id = :p0 AND id = :p1"
         return await self._db.fetch_one(sql, tenant_id, record_id)
 
     async def describe_schema(
@@ -373,8 +415,7 @@ class ErpConnector:
             for r in rows
         ]
         sample_rows = await self._db.fetch(
-            f"SELECT * FROM {self.SCHEMA}.{resource} "
-            f"WHERE tenant_id = :p0 LIMIT 3",
+            f"SELECT * FROM {self.SCHEMA}.{resource} WHERE tenant_id = :p0 LIMIT 3",
             tenant_id,
         )
         return SchemaDescription(
@@ -399,8 +440,7 @@ class ErpConnector:
         if op == "create":
             # Reverse INSERT with DELETE of the created row.
             await self._db.execute(
-                f"DELETE FROM {self.SCHEMA}.{resource} "
-                f"WHERE tenant_id = :p0 AND id = :p1",
+                f"DELETE FROM {self.SCHEMA}.{resource} WHERE tenant_id = :p0 AND id = :p1",
                 tenant_id,
                 record_id,
             )
@@ -429,8 +469,5 @@ class ErpConnector:
             col_list = ", ".join(["tenant_id", "id"] + cols)
             placeholders = ", ".join(f":p{i}" for i in range(len(cols) + 2))
             params = [tenant_id, record_id, *[before[c] for c in cols]]
-            sql = (
-                f"INSERT INTO {self.SCHEMA}.{resource} ({col_list}) "
-                f"VALUES ({placeholders})"
-            )
+            sql = f"INSERT INTO {self.SCHEMA}.{resource} ({col_list}) VALUES ({placeholders})"
             await self._db.execute(sql, *params)

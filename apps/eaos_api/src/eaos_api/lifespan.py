@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.text2sql_engine = deps.text2sql_engine
     app.state.data_connectors = deps.data_connectors
     app.state.tool_registry = deps.tool_registry
+    app.state.write_pipeline = deps.write_pipeline
     app.state._deps = deps  # hold reference so close_deps can run on shutdown
 
     try:

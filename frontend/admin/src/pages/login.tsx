@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, BackendUrlBanner } from "@eaos/shared";
 import { apiClient, useAuthStore } from "@eaos/shared/api";
-import { Sparkles, Mail, Loader2, KeyRound, LogIn } from "lucide-react";
+import { Sparkles, Mail, Loader2, KeyRound, LogIn, Building2 } from "lucide-react";
 
 interface SSOProvider {
   provider_key: string;
@@ -14,7 +14,9 @@ export default function Login() {
   const navigate = useNavigate();
   const { login } = useAuth();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const [tenantSlug, setTenantSlug] = useState("acme-corp");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providers, setProviders] = useState<SSOProvider[]>([]);
@@ -33,14 +35,14 @@ export default function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!tenantSlug.trim() || !email.trim() || !password) return;
     setLoading(true);
     setError(null);
     try {
-      await login(email.trim());
+      await login(tenantSlug.trim(), email.trim(), password);
       navigate("/admin", { replace: true });
     } catch {
-      setError("登录失败，请检查邮箱是否为管理员账号");
+      setError("登录失败，请检查管理员邮箱和密码");
     } finally {
       setLoading(false);
     }
@@ -114,7 +116,21 @@ export default function Login() {
           onSubmit={handleSubmit}
           className="rounded-xl border border-border bg-elevated p-6 shadow-sm"
         >
-          <label className="mb-1.5 block text-sm font-medium text-foreground">管理员邮箱</label>
+          <label className="mb-1.5 block text-sm font-medium text-foreground">企业租户</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tertiary" />
+            <input
+              type="text"
+              value={tenantSlug}
+              onChange={(e) => setTenantSlug(e.target.value)}
+              placeholder="acme-corp"
+              required
+              autoComplete="organization"
+              className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-3 text-sm text-foreground placeholder:text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
+
+          <label className="mb-1.5 mt-4 block text-sm font-medium text-foreground">管理员邮箱</label>
           <div className="relative">
             <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tertiary" />
             <input
@@ -123,7 +139,22 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@acme.com"
               required
+              autoComplete="email"
               autoFocus
+              className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-3 text-sm text-foreground placeholder:text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
+
+          <label className="mb-1.5 mt-4 block text-sm font-medium text-foreground">密码</label>
+          <div className="relative">
+            <KeyRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tertiary" />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="请输入密码"
+              required
+              autoComplete="current-password"
               className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-3 text-sm text-foreground placeholder:text-tertiary focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
           </div>
@@ -132,7 +163,7 @@ export default function Login() {
 
           <button
             type="submit"
-            disabled={loading || !email.trim()}
+            disabled={loading || !tenantSlug.trim() || !email.trim() || !password}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-strong disabled:opacity-50"
           >
             {loading && <Loader2 className="h-4 w-4 animate-spin" />}

@@ -12,16 +12,16 @@ Endpoints:
 - Admin:    ``GET /admin/contributions``, ``GET /admin/contributions/{id}``,
             ``POST /admin/contributions/{id}/review``
 
-Atomicity: ``rag.ingest()`` uses autocommit ``DbClient.execute`` internally
-and cannot join a ``db.session()`` transaction. On approve, we call
-``rag.ingest()`` first; if it raises, the contribution stays ``pending``
-and the API returns 500. The subsequent UPDATE + notification INSERT use
+Recoverability: ``rag.ingest()`` finishes embeddings before creating a
+document, records in-progress indexing, and repairs missing or partial chunks
+on retry. On approve, we call ``rag.ingest()`` first; if it raises, the
+contribution stays ``pending`` and the API returns 500. The subsequent UPDATE
+and notification INSERT use
 two ``db.execute()`` calls (matching the pattern in ``knowledge_docs.py``
 delete). If the notification INSERT fails after the UPDATE, the
 contribution is marked approved but the submitter is not notified —
 recoverable by manual notification. Re-approve is safe (``rag.ingest``
-inserts a new document row; document-level idempotency via content_hash
-prevents duplicate chunks for the same content).
+verifies the existing chunk set before returning).
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ class ContributionUpdate(BaseModel):
 
 
 class ContributionResubmit(BaseModel):
-    """Request body for POST /knowledge/contributions/{id}/resubmit — revise & resubmit a rejected contribution."""
+    """Revise and resubmit a rejected contribution."""
 
     title: str | None = None
     content: str | None = None
@@ -415,37 +415,24 @@ async def review_contribution(
     title = row["title"]
 
     if body.decision == "approved":
-        # C04/GAP-09: Idempotent ingest — check if a document already exists
-        # for this contribution. If ingest succeeded before but the status
-        # UPDATE failed, the contribution is still 'pending' but the document
-        # is already in the knowledge base. Re-ingesting would create duplicates.
-        existing_doc = await db.fetch_one(
-            "SELECT id FROM knowledge.documents "
-            "WHERE tenant_id = :p0 "
-            "AND metadata->>'contribution_id' = :p1",
-            principal.tenant_id,
-            str(row["id"]),
+        # Always ask the idempotent pipeline to verify the indexed chunk set.
+        # A prior attempt may have created the document row but failed before
+        # vector insertion; row existence alone is not proof of completion.
+        contrib_metadata = row.get("metadata") or {}
+        if not isinstance(contrib_metadata, dict):
+            contrib_metadata = {}
+        doc_metadata = {
+            **contrib_metadata,
+            "contribution_id": str(row["id"]),
+        }
+        doc = Document(
+            source_type=row["source_type"],
+            source_uri=row.get("source_uri") or f"contribution://{row['id']}",
+            title=title,
+            content=row["content"],
+            metadata=doc_metadata,
         )
-
-        if existing_doc is None:
-            # Ingest content into the indexed knowledge.documents table.
-            # Done first so a failure leaves the contribution in 'pending'.
-            contrib_metadata = row.get("metadata") or {}
-            if not isinstance(contrib_metadata, dict):
-                contrib_metadata = {}
-            doc_metadata = {
-                **contrib_metadata,
-                "contribution_id": str(row["id"]),
-            }
-            doc = Document(
-                source_type=row["source_type"],
-                source_uri=row.get("source_uri") or f"contribution://{row['id']}",
-                title=title,
-                content=row["content"],
-                metadata=doc_metadata,
-            )
-            await rag.ingest(doc, principal.tenant_id)
-        # else: document already ingested from a previous attempt — skip ingest
+        await rag.ingest(doc, principal.tenant_id)
 
         await db.execute(
             "UPDATE knowledge.contributions "

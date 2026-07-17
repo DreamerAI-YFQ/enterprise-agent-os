@@ -10,7 +10,7 @@ from eaos.core.logging import _inject_tenant_context, configure_logging, get_log
 
 
 def _config(environment: str = "local", debug: bool = False) -> AppConfig:
-    return AppConfig(environment=environment, debug=debug)
+    return AppConfig(environment=environment, debug=debug)  # type: ignore[call-arg]
 
 
 class TestConfigureLogging:

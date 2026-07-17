@@ -12,7 +12,9 @@ export default function LoginPage() {
   const { login, isLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [tenantSlug, setTenantSlug] = useState("acme-corp");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const from = (location.state as LocationState)?.from?.pathname;
@@ -21,6 +23,11 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     const trimmed = email.trim();
+    const trimmedTenant = tenantSlug.trim();
+    if (!trimmedTenant) {
+      setError("请输入企业租户标识");
+      return;
+    }
     if (!trimmed) {
       setError("请输入企业邮箱");
       return;
@@ -29,8 +36,12 @@ export default function LoginPage() {
       setError("邮箱格式不正确");
       return;
     }
+    if (!password) {
+      setError("请输入密码");
+      return;
+    }
     try {
-      await login(trimmed);
+      await login(trimmedTenant, trimmed, password);
       toast.show({ title: "登录成功", variant: "success" });
       navigate(from ?? "/app", { replace: true });
     } catch (err) {
@@ -66,6 +77,19 @@ export default function LoginPage() {
           className="rounded-lg border border-border bg-elevated p-8 shadow-sm"
         >
           <label className="mb-2 block text-sm font-medium text-foreground">
+            企业租户
+          </label>
+          <Input
+            type="text"
+            placeholder="acme-corp"
+            value={tenantSlug}
+            onChange={(e) => setTenantSlug(e.target.value)}
+            autoComplete="organization"
+            disabled={isLoading}
+            className="h-12"
+          />
+
+          <label className="mb-2 mt-4 block text-sm font-medium text-foreground">
             企业邮箱
           </label>
           <Input
@@ -75,6 +99,19 @@ export default function LoginPage() {
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
             autoFocus
+            disabled={isLoading}
+            className="h-12"
+          />
+
+          <label className="mb-2 mt-4 block text-sm font-medium text-foreground">
+            密码
+          </label>
+          <Input
+            type="password"
+            placeholder="请输入密码"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
             disabled={isLoading}
             className="h-12"
           />
@@ -106,7 +143,7 @@ export default function LoginPage() {
           </Button>
 
           <p className="mt-4 text-center text-xs text-tertiary">
-            使用企业邮箱免密登录 · 首次登录自动注册
+            请使用管理员分配的企业账号和密码登录
           </p>
         </form>
 

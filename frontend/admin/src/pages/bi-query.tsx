@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@eaos/shared/api";
 import { Spinner, cn } from "@eaos/shared";
@@ -62,7 +62,10 @@ export default function BiQueryPage() {
     },
   });
 
-  const datasources = datasourcesQuery.data ?? [];
+  const datasources = useMemo(
+    () => datasourcesQuery.data ?? [],
+    [datasourcesQuery.data],
+  );
   useEffect(() => {
     if (datasources.length > 0 && !datasourceId) {
       setDatasourceId(datasources[0].id);

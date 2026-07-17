@@ -14,10 +14,51 @@ from eaos.core.auth import (
     Principal,
     create_jwt_token,
     get_global_auth,
+    hash_password,
     set_global_auth,
+    verify_password,
 )
 
-SECRET = "test-secret-key"
+SECRET = "test-secret-key-with-at-least-thirty-two-bytes"
+
+
+class TestPasswordHashing:
+    def test_hash_and_verify_roundtrip(self) -> None:
+        encoded = hash_password("correct horse battery staple")
+        assert encoded.startswith("scrypt$v1$16384$8$1$")
+        assert verify_password("correct horse battery staple", encoded) is True
+
+    def test_random_salt_produces_distinct_hashes(self) -> None:
+        first = hash_password("same-password")
+        second = hash_password("same-password")
+        assert first != second
+        assert verify_password("same-password", first) is True
+        assert verify_password("same-password", second) is True
+
+    def test_wrong_password_is_rejected(self) -> None:
+        encoded = hash_password("expected-password")
+        assert verify_password("wrong-password", encoded) is False
+
+    def test_unicode_password_roundtrip(self) -> None:
+        encoded = hash_password("逐风破浪-安全密码")
+        assert verify_password("逐风破浪-安全密码", encoded) is True
+
+    @pytest.mark.parametrize(
+        "encoded",
+        [
+            "",
+            "not-a-password-hash",
+            "scrypt$v2$16384$8$1$bad$bad",
+            "scrypt$v1$1073741824$8$1$bad$bad",
+            "scrypt$v1$16384$8$1$%%%$%%%",
+        ],
+    )
+    def test_malformed_hash_fails_closed(self, encoded: str) -> None:
+        assert verify_password("candidate", encoded) is False
+
+    def test_empty_password_cannot_be_hashed(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            hash_password("")
 
 
 class FakeAuthDb:
@@ -27,9 +68,22 @@ class FakeAuthDb:
         self,
         permissions: list[dict[str, Any]] | None = None,
         memberships: list[dict[str, Any]] | None = None,
+        identity: dict[str, Any] | None = None,
+        *,
+        identity_exists: bool = True,
     ) -> None:
         self._permissions = permissions or []
         self._memberships = memberships or []
+        self._identity = (
+            identity
+            or {
+                "role": "employee",
+                "status": "active",
+                "tenant_status": "active",
+            }
+            if identity_exists
+            else None
+        )
 
     async def fetch(self, sql: str, *params: Any) -> list[dict[str, Any]]:
         if "iam.memberships" in sql:
@@ -37,11 +91,19 @@ class FakeAuthDb:
         return list(self._permissions)
 
     async def fetch_one(self, sql: str, *params: Any) -> dict[str, Any] | None:
+        if "FROM iam.users u" in sql:
+            return self._identity
         if "iam.permissions" in sql:
             for row in self._permissions:
                 return row
             return None
         return None
+
+
+class FailingIdentityDb(FakeAuthDb):
+    async def fetch_one(self, sql: str, *params: Any) -> dict[str, Any] | None:
+        del sql, params
+        raise RuntimeError("database unavailable")
 
 
 class TestJwt:
@@ -66,7 +128,11 @@ class TestJwt:
         tid = uuid4()
         token = create_jwt_token(SECRET, uid, tid, "employee")
         with pytest.raises(jwt.InvalidSignatureError):
-            jwt.decode(token, "wrong-secret", algorithms=["HS256"])
+            jwt.decode(
+                token,
+                "wrong-secret-key-with-at-least-thirty-two-bytes",
+                algorithms=["HS256"],
+            )
 
 
 class TestPermissionEvaluator:
@@ -98,9 +164,7 @@ class TestPermissionEvaluator:
         assert await evaluator.check(principal, "agent", "delete") is True
 
     async def test_rbac_allow(self) -> None:
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(permissions=[{"constraint": None}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(permissions=[{"constraint": None}]))
         principal = self._principal(role="employee")
         assert await evaluator.check(principal, "agent", "read") is True
 
@@ -111,22 +175,16 @@ class TestPermissionEvaluator:
 
     async def test_abac_scope_own_owner_match(self) -> None:
         uid = uuid4()
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(permissions=[{"constraint": {"scope": "own"}}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(permissions=[{"constraint": {"scope": "own"}}]))
         principal = Principal(
             user_id=uid,
             tenant_id=uuid4(),
             role="employee",
         )
-        assert await evaluator.check(
-            principal, "agent", "read", resource_owner_id=uid
-        ) is True
+        assert await evaluator.check(principal, "agent", "read", resource_owner_id=uid) is True
 
     async def test_abac_scope_own_owner_mismatch(self) -> None:
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(permissions=[{"constraint": {"scope": "own"}}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(permissions=[{"constraint": {"scope": "own"}}]))
         principal = self._principal(role="employee")
         assert (
             await evaluator.check(
@@ -140,37 +198,64 @@ class TestPermissionEvaluator:
 
     async def test_abac_dept_match(self) -> None:
         dept = uuid4()
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(permissions=[{"constraint": {"dept": True}}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(permissions=[{"constraint": {"dept": True}}]))
         principal = self._principal(role="employee", departments=[dept])
-        assert (
-            await evaluator.check(
-                principal, "agent", "read", resource_dept_id=dept
-            )
-            is True
-        )
+        assert await evaluator.check(principal, "agent", "read", resource_dept_id=dept) is True
 
     async def test_abac_dept_mismatch(self) -> None:
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(permissions=[{"constraint": {"dept": True}}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(permissions=[{"constraint": {"dept": True}}]))
         principal = self._principal(role="employee", departments=[uuid4()])
-        assert (
-            await evaluator.check(
-                principal, "agent", "read", resource_dept_id=uuid4()
-            )
-            is False
-        )
+        assert await evaluator.check(principal, "agent", "read", resource_dept_id=uuid4()) is False
 
     async def test_load_departments(self) -> None:
         dept_id = uuid4()
-        evaluator = PermissionEvaluator(
-            FakeAuthDb(memberships=[{"department_id": dept_id}])
-        )
+        evaluator = PermissionEvaluator(FakeAuthDb(memberships=[{"department_id": dept_id}]))
         uid = uuid4()
         result = await evaluator.load_departments(uid)
         assert result == [dept_id]
+
+    async def test_load_active_identity_uses_current_db_role(self) -> None:
+        dept_id = uuid4()
+        evaluator = PermissionEvaluator(
+            FakeAuthDb(
+                memberships=[{"department_id": dept_id}],
+                identity={
+                    "role": "manager",
+                    "status": "active",
+                    "tenant_status": "active",
+                },
+            )
+        )
+        uid = uuid4()
+        tid = uuid4()
+        principal = await evaluator.load_active_identity(uid, tid)
+        assert principal is not None
+        assert principal.role == "manager"
+        assert principal.departments == [dept_id]
+
+    async def test_load_active_identity_rejects_suspended_user(self) -> None:
+        evaluator = PermissionEvaluator(
+            FakeAuthDb(
+                identity={
+                    "role": "employee",
+                    "status": "suspended",
+                    "tenant_status": "active",
+                }
+            )
+        )
+        assert await evaluator.load_active_identity(uuid4(), uuid4()) is None
+
+    async def test_load_active_identity_rejects_inactive_tenant(self) -> None:
+        evaluator = PermissionEvaluator(
+            FakeAuthDb(
+                identity={
+                    "role": "employee",
+                    "status": "active",
+                    "tenant_status": "inactive",
+                }
+            )
+        )
+        assert await evaluator.load_active_identity(uuid4(), uuid4()) is None
 
 
 class TestGlobalAuth:
@@ -188,6 +273,8 @@ class TestJWTAuthMiddleware:
     def _make_middleware(
         self,
         evaluator: PermissionEvaluator | None = None,
+        *,
+        with_default_evaluator: bool = True,
     ) -> tuple[
         JWTAuthMiddleware,
         AsyncMock,
@@ -204,6 +291,8 @@ class TestJWTAuthMiddleware:
             return {"type": "http.request", "body": b""}
 
         app = AsyncMock()
+        if evaluator is None and with_default_evaluator:
+            evaluator = PermissionEvaluator(FakeAuthDb())
         mw = JWTAuthMiddleware(app, SECRET, evaluator)
         return mw, app, sent, receive, send
 
@@ -264,11 +353,71 @@ class TestJWTAuthMiddleware:
         assert principal.tenant_id == tid
         assert principal.role == "employee"
 
-    async def test_service_token_authenticates(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_current_db_role_overrides_stale_token_role(self) -> None:
+        evaluator = PermissionEvaluator(
+            FakeAuthDb(
+                identity={
+                    "role": "manager",
+                    "status": "active",
+                    "tenant_status": "active",
+                }
+            )
+        )
+        mw, app, _, receive, send = self._make_middleware(evaluator)
+        uid = uuid4()
+        tid = uuid4()
+        scope = self._http_scope(
+            path="/invoke",
+            token=create_jwt_token(SECRET, uid, tid, "employee"),
+        )
+        await mw(scope, receive, send)
+        app.assert_awaited_once()
+        principal = scope["principal"]
+        assert principal.role == "manager"
+
+    @pytest.mark.parametrize("status", ["inactive", "suspended"])
+    async def test_inactive_user_token_is_rejected(self, status: str) -> None:
+        evaluator = PermissionEvaluator(
+            FakeAuthDb(
+                identity={
+                    "role": "employee",
+                    "status": status,
+                    "tenant_status": "active",
+                }
+            )
+        )
+        mw, app, sent, receive, send = self._make_middleware(evaluator)
+        scope = self._http_scope(token=create_jwt_token(SECRET, uuid4(), uuid4(), "employee"))
+        await mw(scope, receive, send)
+        app.assert_not_awaited()
+        assert sent[0]["status"] == 401
+
+    async def test_deleted_user_token_is_rejected(self) -> None:
+        evaluator = PermissionEvaluator(FakeAuthDb(identity_exists=False))
+        mw, app, sent, receive, send = self._make_middleware(evaluator)
+        scope = self._http_scope(token=create_jwt_token(SECRET, uuid4(), uuid4(), "employee"))
+        await mw(scope, receive, send)
+        app.assert_not_awaited()
+        assert sent[0]["status"] == 401
+
+    async def test_identity_database_error_fails_closed(self) -> None:
+        evaluator = PermissionEvaluator(FailingIdentityDb())
+        mw, app, sent, receive, send = self._make_middleware(evaluator)
+        scope = self._http_scope(token=create_jwt_token(SECRET, uuid4(), uuid4(), "employee"))
+        await mw(scope, receive, send)
+        app.assert_not_awaited()
+        assert sent[0]["status"] == 401
+
+    async def test_missing_identity_evaluator_fails_closed(self) -> None:
+        mw, app, sent, receive, send = self._make_middleware(with_default_evaluator=False)
+        scope = self._http_scope(token=create_jwt_token(SECRET, uuid4(), uuid4(), "employee"))
+        await mw(scope, receive, send)
+        app.assert_not_awaited()
+        assert sent[0]["status"] == 401
+
+    async def test_service_token_authenticates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("EAOS_SERVICE_TOKEN", "svc-secret")
-        mw, app, _, receive, send = self._make_middleware()
+        mw, app, _, receive, send = self._make_middleware(with_default_evaluator=False)
         scope = self._http_scope(path="/invoke", token="svc-secret")
         await mw(scope, receive, send)
         app.assert_awaited_once()

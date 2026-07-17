@@ -33,10 +33,17 @@ class VectorStore(Protocol):
         table: str,
         top_k: int = 5,
         filter: dict[str, Any] | None = None,
+        *,
+        visibility_user_id: UUID | None = None,
+        visibility_department_ids: list[UUID] | None = None,
     ) -> list[VectorSearchResult]:
         """Find nearest neighbors by embedding, scoped to tenant.
 
         filter is applied as additional WHERE clauses on metadata columns.
+        When ``visibility_user_id`` is provided, implementations supporting
+        scoped knowledge rows must restrict candidates to enterprise rows,
+        the user's personal rows, and rows owned by one of the supplied
+        departments before applying Top-K.
         """
         ...
 

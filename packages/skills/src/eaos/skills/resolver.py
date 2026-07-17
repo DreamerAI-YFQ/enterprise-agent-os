@@ -34,6 +34,22 @@ class SkillResolver(Protocol):
         ...
 
 
+def select_exact_skill(
+    skills: list[SkillSpec],
+    requested_name: object,
+) -> SkillSpec | None:
+    """Return one exact visible match, otherwise fail closed.
+
+    Fuzzy, prefix, case-folded, and first-item fallback matching are
+    intentionally excluded. Duplicate visible names are ambiguous and also
+    return ``None``.
+    """
+    if not isinstance(requested_name, str) or not requested_name:
+        return None
+    matches = [skill for skill in skills if skill.name == requested_name]
+    return matches[0] if len(matches) == 1 else None
+
+
 class SkillResolverImpl:
     """SkillResolver backed by PostgreSQL.
 
@@ -62,12 +78,15 @@ class SkillResolverImpl:
             "s.guardrail, s.status, s.version, "
             "s.instructions, s.tools, s.tool_bindings "
             "FROM skills.skills s "
-            "WHERE s.status = 'published' AND ("
+            "WHERE s.tenant_id = :tenant_id "
+            "AND s.status = 'published' AND ("
             "  (s.scope = 'personal' AND s.owner_id = :p0) OR "
             "  (s.scope = 'department' AND s.owner_id IN ("
-            "    SELECT m.department_id FROM iam.memberships m WHERE m.user_id = :p0"
+            "    SELECT m.department_id FROM iam.memberships m "
+            "    JOIN iam.departments d ON d.id = m.department_id "
+            "    WHERE m.user_id = :p0 AND d.tenant_id = :tenant_id"
             "  )) OR "
-            "  (s.scope = 'company')"
+            "  (s.scope = 'company' AND s.owner_id IS NULL)"
             ") ORDER BY s.name",
             tenant_id,
             user_id,
@@ -89,6 +108,7 @@ class SkillResolverImpl:
             "JOIN agent.agent_skills a ON a.skill_id = s.id "
             "WHERE a.agent_id = :p0 AND a.enabled = TRUE "
             "AND s.tenant_id = :tenant_id "
+            "AND s.status = 'published' "
             "ORDER BY s.name",
             tenant_id,
             agent_id,

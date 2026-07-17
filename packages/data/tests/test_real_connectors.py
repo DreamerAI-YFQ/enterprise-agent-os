@@ -95,8 +95,15 @@ class TestErpConnector:
         connector = ErpConnector(db)
         result = await connector.read(TID, "orders", ReadQuery(limit=5))
 
-        assert result.total == 15
-        assert len(result.rows) == 5
+        row = await db.fetch_one(
+            "SELECT COUNT(*) AS total FROM erp.orders WHERE tenant_id = :p0",
+            TID,
+        )
+        assert row is not None
+        expected_total = int(row["total"])
+        assert expected_total > 0
+        assert result.total == expected_total
+        assert len(result.rows) == min(5, expected_total)
 
     async def test_read_customers_with_filter(self, db: DbClient) -> None:
         from eaos.data.connector import ReadQuery

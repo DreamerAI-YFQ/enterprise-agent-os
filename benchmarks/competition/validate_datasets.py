@@ -1,9 +1,11 @@
 """Quick validation of competition datasets."""
 import glob
+
 import yaml
 
 for f in sorted(glob.glob("benchmarks/competition/datasets/*.yaml")):
-    data = yaml.safe_load(open(f, encoding="utf-8"))
+    with open(f, encoding="utf-8") as dataset_file:
+        data = yaml.safe_load(dataset_file)
     # Support different key names
     cases = []
     if isinstance(data, dict):

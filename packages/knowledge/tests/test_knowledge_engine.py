@@ -103,14 +103,69 @@ class TestSearch:
         chunk = _make_chunk("x")
         doc_id = uuid4()
         chunk = Chunk(
-            id=chunk.id, document_id=doc_id, tenant_id=chunk.tenant_id,
-            chunk_index=0, content="x", token_count=1, metadata={"key": "val"},
+            id=chunk.id,
+            document_id=doc_id,
+            tenant_id=chunk.tenant_id,
+            chunk_index=0,
+            content="x",
+            token_count=1,
+            metadata={"key": "val"},
         )
         deps["rag"].retrieve.return_value = [chunk]
         result = await engine.search("q", TID)
         # C13/Fix-A: document_id is injected into metadata for citation/eval
         assert result[0].metadata["key"] == "val"
         assert result[0].metadata["document_id"] == str(doc_id)
+
+    async def test_rewrite_exception_falls_back_to_original_query(self) -> None:
+        engine, deps = _make_engine()
+        deps["rewriter"].rewrite.side_effect = TimeoutError("provider timeout")
+        deps["rag"].retrieve.return_value = []
+
+        await engine.search("original query", TID)
+
+        deps["rag"].retrieve.assert_awaited_once_with(
+            "original query", TID, top_k=5, user_id=None, department_ids=None
+        )
+
+    async def test_structured_identifier_skips_llm_rewrite(self) -> None:
+        engine, deps = _make_engine()
+        deps["rag"].retrieve.return_value = []
+
+        await engine.search("查询 KB-POL-003", TID)
+
+        deps["rewriter"].rewrite.assert_not_awaited()
+        deps["rag"].retrieve.assert_awaited_once_with(
+            "查询 KB-POL-003",
+            TID,
+            top_k=5,
+            user_id=None,
+            department_ids=None,
+        )
+
+    async def test_loads_tenant_checked_department_memberships(self) -> None:
+        engine, deps = _make_engine()
+        db: Any = MagicMock()
+        department_id = uuid4()
+        db.fetch = AsyncMock(return_value=[{"department_id": department_id}])
+        engine._db = db
+        user_id = uuid4()
+        deps["rewriter"].rewrite.return_value = _rewritten_query("expanded")
+        deps["rag"].retrieve.return_value = []
+
+        await engine.search("query", TID, user_id=user_id)
+
+        membership_call = db.fetch.call_args
+        assert "iam.memberships" in membership_call.args[0]
+        assert "JOIN iam.departments" in membership_call.args[0]
+        assert membership_call.args[1:] == (user_id, TID)
+        deps["rag"].retrieve.assert_awaited_once_with(
+            "expanded",
+            TID,
+            top_k=5,
+            user_id=user_id,
+            department_ids=[department_id],
+        )
 
 
 class TestIngestDocument:

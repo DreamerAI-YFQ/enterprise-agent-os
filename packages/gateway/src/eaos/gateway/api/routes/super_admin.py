@@ -145,7 +145,9 @@ async def create_tenant(
         "name": row["name"],
         "slug": row["slug"],
         "status": row["status"],
-        "settings": json.loads(row["settings"]) if isinstance(row["settings"], str) else row["settings"],
+        "settings": json.loads(row["settings"])
+        if isinstance(row["settings"], str)
+        else row["settings"],
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
     }
 
@@ -236,11 +238,11 @@ async def delete_tenant(
 ) -> None:
     """Delete a tenant (cascade deletes all tenant data)."""
     _ = principal
-    result = await db.execute(
-        "DELETE FROM iam.tenants WHERE id = :p0",
+    deleted = await db.fetch_one(
+        "DELETE FROM iam.tenants WHERE id = :p0 RETURNING id",
         tenant_id,
     )
-    if result == 0:
+    if deleted is None:
         raise HTTPException(status_code=404, detail="tenant not found")
 
 
@@ -252,11 +254,11 @@ async def enable_tenant(
 ) -> dict[str, Any]:
     """Set tenant status to active."""
     _ = principal
-    result = await db.execute(
-        "UPDATE iam.tenants SET status = 'active', updated_at = now() WHERE id = :p0",
+    updated = await db.fetch_one(
+        "UPDATE iam.tenants SET status = 'active', updated_at = now() WHERE id = :p0 RETURNING id",
         tenant_id,
     )
-    if result == 0:
+    if updated is None:
         raise HTTPException(status_code=404, detail="tenant not found")
     return {"id": str(tenant_id), "status": "active"}
 
@@ -269,11 +271,12 @@ async def disable_tenant(
 ) -> dict[str, Any]:
     """Set tenant status to suspended."""
     _ = principal
-    result = await db.execute(
-        "UPDATE iam.tenants SET status = 'suspended', updated_at = now() WHERE id = :p0",
+    updated = await db.fetch_one(
+        "UPDATE iam.tenants SET status = 'suspended', updated_at = now() "
+        "WHERE id = :p0 RETURNING id",
         tenant_id,
     )
-    if result == 0:
+    if updated is None:
         raise HTTPException(status_code=404, detail="tenant not found")
     return {"id": str(tenant_id), "status": "suspended"}
 

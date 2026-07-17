@@ -7,21 +7,37 @@ gateway-local imports. setup_middleware() registers both CORS (outer) and JWT
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from eaos.core.auth import JWTAuthMiddleware, Principal
+from eaos.core.auth import JWTAuthMiddleware, PermissionEvaluator, Principal
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import Response
-from starlette.types import ASGIApp
 
 if TYPE_CHECKING:
-    from eaos.core.auth import PermissionEvaluator
     from eaos.core.config import AppConfig
     from fastapi import FastAPI
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.types import ASGIApp
 
 __all__ = ["JWTAuthMiddleware", "Principal", "setup_middleware"]
+
+
+def _resolve_auth_evaluator(scope: dict[str, Any]) -> PermissionEvaluator | None:
+    """Resolve the live evaluator after FastAPI lifespan wiring completes."""
+    fastapi_app = scope.get("app")
+    state = getattr(fastapi_app, "state", None)
+    if state is None:
+        return None
+    evaluator = getattr(state, "auth_evaluator", None)
+    if isinstance(evaluator, PermissionEvaluator):
+        return evaluator
+    db = getattr(state, "db", None)
+    if db is None:
+        return None
+    evaluator = PermissionEvaluator(db)
+    state.auth_evaluator = evaluator
+    return evaluator
 
 
 class ApiPrefixMiddleware(BaseHTTPMiddleware):
@@ -36,9 +52,7 @@ class ApiPrefixMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         scope = request.scope
         path: str = scope.get("path", "")
         if path.startswith("/api/"):
@@ -65,6 +79,7 @@ def setup_middleware(
         JWTAuthMiddleware,
         secret=config.secret_key,
         evaluator=evaluator,
+        evaluator_provider=_resolve_auth_evaluator,
     )
     app.add_middleware(
         CORSMiddleware,

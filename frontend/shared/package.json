@@ -17,7 +17,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "gen": "openapi-typescript ../openapi.json -o src/api/generated/openapi.d.ts"
+    "gen": "openapi-typescript ../openapi.json -o src/api/generated/openapi.d.ts",
+    "check": "node ../scripts/check-openapi.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.4",

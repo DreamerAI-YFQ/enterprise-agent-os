@@ -10,8 +10,13 @@ PermissionEvaluator queries iam.permissions (RBAC matrix) and iam.memberships
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import os
+import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
@@ -20,6 +25,111 @@ from eaos.core.context import tenant_id_var, user_id_var
 
 if TYPE_CHECKING:
     from uuid import UUID
+
+
+_PASSWORD_SCHEME = "scrypt"
+_PASSWORD_VERSION = "v1"
+_PASSWORD_N = 2**14
+_PASSWORD_R = 8
+_PASSWORD_P = 1
+_PASSWORD_DKLEN = 32
+_PASSWORD_SALT_BYTES = 16
+_PASSWORD_MAX_BYTES = 4096
+_PASSWORD_MAXMEM = 64 * 1024 * 1024
+_DUMMY_SALT = b"eaos-auth-dummy!"
+_DUMMY_DIGEST = bytes(_PASSWORD_DKLEN)
+
+
+def _password_bytes(password: str) -> bytes:
+    """Encode and bound a password before the deliberately expensive KDF."""
+    if not isinstance(password, str) or not password:
+        raise ValueError("password must be a non-empty string")
+    encoded = password.encode("utf-8")
+    if len(encoded) > _PASSWORD_MAX_BYTES:
+        raise ValueError("password is too long")
+    return encoded
+
+
+def _derive_password(password: bytes, salt: bytes) -> bytes:
+    return hashlib.scrypt(
+        password,
+        salt=salt,
+        n=_PASSWORD_N,
+        r=_PASSWORD_R,
+        p=_PASSWORD_P,
+        maxmem=_PASSWORD_MAXMEM,
+        dklen=_PASSWORD_DKLEN,
+    )
+
+
+def hash_password(password: str) -> str:
+    """Hash a password with stdlib scrypt and a fresh random salt.
+
+    The self-describing format is::
+
+        scrypt$v1$16384$8$1$<base64-salt>$<base64-derived-key>
+
+    Parameters are deliberately fixed for this version.  A later cost change
+    should introduce a new version instead of accepting attacker-controlled
+    KDF parameters during verification.
+    """
+    password_bytes = _password_bytes(password)
+    salt = secrets.token_bytes(_PASSWORD_SALT_BYTES)
+    digest = _derive_password(password_bytes, salt)
+    salt_text = base64.b64encode(salt).decode("ascii")
+    digest_text = base64.b64encode(digest).decode("ascii")
+    return (
+        f"{_PASSWORD_SCHEME}${_PASSWORD_VERSION}${_PASSWORD_N}$"
+        f"{_PASSWORD_R}${_PASSWORD_P}${salt_text}${digest_text}"
+    )
+
+
+def _parse_password_hash(encoded_hash: str) -> tuple[bytes, bytes] | None:
+    if not isinstance(encoded_hash, str):
+        return None
+    parts = encoded_hash.split("$")
+    if len(parts) != 7:
+        return None
+    scheme, version, n_text, r_text, p_text, salt_text, digest_text = parts
+    if (
+        scheme != _PASSWORD_SCHEME
+        or version != _PASSWORD_VERSION
+        or n_text != str(_PASSWORD_N)
+        or r_text != str(_PASSWORD_R)
+        or p_text != str(_PASSWORD_P)
+    ):
+        return None
+    try:
+        salt = base64.b64decode(salt_text, validate=True)
+        digest = base64.b64decode(digest_text, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(salt) != _PASSWORD_SALT_BYTES or len(digest) != _PASSWORD_DKLEN:
+        return None
+    return salt, digest
+
+
+def verify_password(password: str, encoded_hash: str) -> bool:
+    """Verify a password without raising and fail closed on malformed hashes.
+
+    Even a malformed stored value performs one fixed-cost scrypt derivation,
+    so missing or legacy credentials do not create an obvious cheap timing
+    path.  The derived key comparison uses ``hmac.compare_digest``.
+    """
+    try:
+        password_bytes = _password_bytes(password)
+    except (TypeError, UnicodeError, ValueError):
+        return False
+
+    parsed = _parse_password_hash(encoded_hash)
+    valid_format = parsed is not None
+    salt, expected = parsed or (_DUMMY_SALT, _DUMMY_DIGEST)
+    try:
+        actual = _derive_password(password_bytes, salt)
+    except (MemoryError, OverflowError, ValueError):
+        return False
+    matches = hmac.compare_digest(actual, expected)
+    return valid_format and matches
 
 
 # ASGI type aliases (kept loose to avoid starlette import in core).
@@ -82,6 +192,40 @@ class PermissionEvaluator:
         )
         return [row["department_id"] for row in rows if row.get("department_id")]
 
+    async def load_active_identity(self, user_id: UUID, tenant_id: UUID) -> Principal | None:
+        """Resolve current DB-backed identity state for a JWT subject.
+
+        JWT role claims are only historical assertions. Every authenticated
+        request rechecks the user and tenant status and loads the current role
+        so suspension, deletion, and role changes take effect immediately.
+        Database failures intentionally propagate for the middleware to deny
+        the request rather than trusting stale claims.
+        """
+        row = await self._db.fetch_one(
+            "SELECT u.role, u.status, t.status AS tenant_status "
+            "FROM iam.users u "
+            "JOIN iam.tenants t ON t.id = u.tenant_id "
+            "WHERE u.id = :p0 AND u.tenant_id = :p1",
+            user_id,
+            tenant_id,
+        )
+        if row is None:
+            return None
+        if row.get("status") != "active":
+            return None
+        if row.get("tenant_status", "active") != "active":
+            return None
+        role = row.get("role")
+        if not isinstance(role, str) or not role:
+            return None
+        departments = await self.load_departments(user_id)
+        return Principal(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            role=role,
+            departments=departments,
+        )
+
     async def check(
         self,
         principal: Principal,
@@ -102,7 +246,7 @@ class PermissionEvaluator:
             return True
 
         row = await self._db.fetch_one(
-            "SELECT \"constraint\" FROM iam.permissions "
+            'SELECT "constraint" FROM iam.permissions '
             "WHERE tenant_id = :p0 AND role = :p1 "
             "AND resource = :p2 AND action = :p3",
             principal.tenant_id,
@@ -180,9 +324,7 @@ def _json_response(
     """Send a JSON error response with unified ``{detail, code}`` shape."""
 
     async def _send() -> None:
-        body = json.dumps(
-            {"detail": detail, "code": status_to_code(status)}
-        ).encode()
+        body = json.dumps({"detail": detail, "code": status_to_code(status)}).encode()
         await send(
             {
                 "type": "http.response.start",
@@ -217,10 +359,12 @@ class JWTAuthMiddleware:
         app: Any,
         secret: str,
         evaluator: PermissionEvaluator | None = None,
+        evaluator_provider: Callable[[Scope], PermissionEvaluator | None] | None = None,
     ) -> None:
         self._app = app
         self._secret = secret
         self._evaluator = evaluator
+        self._evaluator_provider = evaluator_provider
 
     async def __call__(
         self,
@@ -248,7 +392,7 @@ class JWTAuthMiddleware:
             await _json_response(send, 401, "invalid authorization scheme")
             return
 
-        principal = await self._authenticate(token)
+        principal = await self._authenticate(token, scope)
         if principal is None:
             await _json_response(send, 401, "invalid token")
             return
@@ -259,10 +403,10 @@ class JWTAuthMiddleware:
 
         await self._app(scope, receive, send)
 
-    async def _authenticate(self, token: str) -> Principal | None:
+    async def _authenticate(self, token: str, scope: Scope) -> Principal | None:
         """Resolve token to Principal (service token or JWT)."""
         service_token = os.environ.get("EAOS_SERVICE_TOKEN")
-        if service_token and token == service_token:
+        if service_token and hmac.compare_digest(token, service_token):
             return _service_principal()
 
         import jwt
@@ -276,14 +420,28 @@ class JWTAuthMiddleware:
         except Exception:
             return None
 
-        return await self._build_principal(payload)
+        evaluator = self._evaluator
+        if evaluator is None and self._evaluator_provider is not None:
+            try:
+                evaluator = self._evaluator_provider(scope)
+            except Exception:
+                return None
+        if evaluator is None:
+            return None
+        try:
+            return await self._build_principal(payload, evaluator)
+        except Exception:
+            return None
 
-    async def _build_principal(self, payload: dict[str, Any]) -> Principal | None:
+    async def _build_principal(
+        self,
+        payload: dict[str, Any],
+        evaluator: PermissionEvaluator,
+    ) -> Principal | None:
         from uuid import UUID
 
         sub = payload.get("sub")
         tid = payload.get("tid")
-        role = payload.get("role", "employee")
         if sub is None or tid is None:
             return None
 
@@ -293,16 +451,7 @@ class JWTAuthMiddleware:
         except (ValueError, TypeError):
             return None
 
-        departments: list[UUID] = []
-        if self._evaluator is not None:
-            departments = await self._evaluator.load_departments(user_id)
-
-        return Principal(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            role=str(role),
-            departments=departments,
-        )
+        return await evaluator.load_active_identity(user_id, tenant_id)
 
 
 def _service_principal() -> Principal:

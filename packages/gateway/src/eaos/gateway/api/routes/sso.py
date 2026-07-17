@@ -19,6 +19,7 @@ Admin:
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from typing import Any
 from uuid import UUID  # noqa: TC003 — Pydantic needs UUID at runtime
 
@@ -83,18 +84,18 @@ async def sso_login(
 
     if provider.provider_type == "oidc":
         redirect_uri = f"{base_url}/auth/sso/{provider_key}/callback"
-        service = OIDCService(provider, redirect_uri)
+        oidc_service = OIDCService(provider, redirect_uri)
         try:
-            url = await service.get_authorization_url(state)
+            url = await oidc_service.get_authorization_url(state)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"failed to contact IdP: {exc}") from exc
         return RedirectResponse(url=url, status_code=302)
 
     if provider.provider_type == "saml":
-        service = SAMLService(provider, base_url, provider_key)
+        saml_service = SAMLService(provider, base_url, provider_key)
         request_dict = build_saml_request_dict(request)
         try:
-            url = service.get_login_url(request_dict, state)
+            url = saml_service.get_login_url(request_dict, state)
         except Exception as exc:
             raise HTTPException(
                 status_code=502, detail=f"failed to generate SAML AuthnRequest: {exc}"
@@ -102,7 +103,11 @@ async def sso_login(
         return RedirectResponse(url=url, status_code=302)
 
     raise HTTPException(
-        status_code=400, detail=f"provider '{provider_key}' type '{provider.provider_type}' does not support login redirect"
+        status_code=400,
+        detail=(
+            f"provider '{provider_key}' type '{provider.provider_type}' "
+            "does not support login redirect"
+        ),
     )
 
 
@@ -145,7 +150,12 @@ async def oidc_callback(
     user_id, role, _created = await find_or_create_user(
         db, tenant_id, email, name, provider.default_role
     )
-    token = create_jwt_token(user_id=user_id, tenant_id=tenant_id, role=role)
+    token = _create_access_token(
+        request,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -180,7 +190,8 @@ async def saml_acs(
 
     form = await request.form()
     saml_response = form.get("SAMLResponse")
-    relay_state = form.get("RelayState") or ""
+    raw_relay_state = form.get("RelayState")
+    relay_state = raw_relay_state if isinstance(raw_relay_state, str) else ""
     if not saml_response:
         raise HTTPException(status_code=400, detail="missing SAMLResponse in form data")
 
@@ -213,9 +224,7 @@ async def saml_acs(
     try:
         result = service.process_acs(request_dict)
     except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"SAML ACS processing failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=502, detail=f"SAML ACS processing failed: {exc}") from exc
     if result is None:
         raise HTTPException(status_code=401, detail="SAML authentication failed")
 
@@ -226,7 +235,12 @@ async def saml_acs(
     user_id, role, _created = await find_or_create_user(
         db, tenant_id, email, name, provider.default_role
     )
-    token = create_jwt_token(user_id=user_id, tenant_id=tenant_id, role=role)
+    token = _create_access_token(
+        request,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -243,9 +257,26 @@ class LDAPLoginRequest(BaseModel):
     password: str
 
 
+def _create_access_token(
+    request: Request,
+    *,
+    user_id: UUID,
+    tenant_id: UUID,
+    role: str,
+) -> str:
+    """Mint an SSO token with the same application secret as auth middleware."""
+    return create_jwt_token(
+        request.app.state.config.secret_key,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=role,
+    )
+
+
 @router.post("/auth/sso/ldap/login", tags=["sso"])
 async def ldap_login(
     body: LDAPLoginRequest,
+    request: Request,
     db: DbClient = Depends(get_db),  # noqa: B008
 ) -> dict[str, Any]:
     """Authenticate against an LDAP server and issue a JWT."""
@@ -263,7 +294,12 @@ async def ldap_login(
     user_id, role, _created = await find_or_create_user(
         db, provider.tenant_id, email, name, provider.default_role
     )
-    token = create_jwt_token(user_id=user_id, tenant_id=provider.tenant_id, role=role)
+    token = _create_access_token(
+        request,
+        user_id=user_id,
+        tenant_id=provider.tenant_id,
+        role=role,
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -511,8 +547,8 @@ async def test_sso_config(
         except Exception as exc:
             return {"ok": False, "detail": f"discovery failed: {exc}"}
     if cfg.provider_type == "ldap":
-        from ldap3 import Server
-        from ldap3.core.exceptions import LDAPException
+        from ldap3 import Server  # type: ignore[import-untyped]
+        from ldap3.core.exceptions import LDAPException  # type: ignore[import-untyped]
 
         server_url = cfg.config.get("server_url", "")
         if not server_url:
@@ -525,10 +561,8 @@ async def test_sso_config(
             opened = conn.open()
             if not opened:
                 return {"ok": False, "detail": f"LDAP open failed: {conn.result}"}
-            try:
+            with suppress(Exception):
                 conn.unbind()
-            except Exception:
-                pass
             return {"ok": True, "detail": f"LDAP server reachable: {server_url}"}
         except LDAPException as exc:
             return {"ok": False, "detail": f"LDAP connection failed: {exc}"}
@@ -540,7 +574,7 @@ async def test_sso_config(
         if not metadata:
             return {"ok": False, "detail": "missing idp_metadata in config"}
         try:
-            from onelogin.saml2.idp_metadata_parser import (
+            from onelogin.saml2.idp_metadata_parser import (  # type: ignore[import-not-found]
                 OneLogin_Saml2_IdPMetadataParser,
             )
 

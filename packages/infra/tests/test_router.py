@@ -34,7 +34,12 @@ class _FakeAdapter:
     ) -> LLMResponse:
         self.last_model = model
         self.last_messages = messages
-        return LLMResponse(content=self._response, model=model)
+        return LLMResponse(
+            content=self._response,
+            model=model,
+            prompt_tokens=7,
+            completion_tokens=3,
+        )
 
     async def stream(
         self,
@@ -181,3 +186,35 @@ class TestNoAdapters:
         router = LLMRouterImpl()
         with pytest.raises(LLMError):
             await router.chat([Message(role="user", content="x")])
+
+
+class TestUsageCapture:
+    async def test_capture_records_routed_model_tokens_and_task(self) -> None:
+        adapter = _FakeAdapter("openai")
+        router = _router_with(adapter)
+
+        async with router.capture_usage() as records:
+            await router.chat(
+                [Message(role="user", content="x")],
+                model_hint="openai:gpt-4o-mini",
+                task_type="plan",
+            )
+
+        assert len(records) == 1
+        assert records[0].provider == "openai"
+        assert records[0].model == "gpt-4o-mini"
+        assert records[0].task_type == "plan"
+        assert records[0].prompt_tokens == 7
+        assert records[0].completion_tokens == 3
+        assert records[0].total_tokens == 10
+        assert records[0].success is True
+
+    async def test_capture_context_is_restored_after_exit(self) -> None:
+        adapter = _FakeAdapter("openai")
+        router = _router_with(adapter)
+
+        async with router.capture_usage() as records:
+            await router.chat([Message(role="user", content="inside")])
+        await router.chat([Message(role="user", content="outside")])
+
+        assert len(records) == 1

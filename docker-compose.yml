@@ -97,6 +97,7 @@ services:
       # Override .env's localhost to use container-network hostnames
       EAOS_DB__URL: postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos
       EAOS_REDIS__URL: redis://eaos-redis:6379/0
+      LANGGRAPH_STRICT_MSGPACK: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,6 +111,7 @@ services:
       context: .
       dockerfile: deploy/docker/Dockerfile.worker
     container_name: eaos-worker
+    command: ["/app/.venv/bin/python", "-m", "eaos_worker"]
     env_file: .env
     environment:
       EAOS_DB__URL: postgresql+asyncpg://eaos:eaos@eaos-postgres:5432/eaos

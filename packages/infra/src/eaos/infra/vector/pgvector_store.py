@@ -30,9 +30,7 @@ _IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 class PgVectorStore:
     """VectorStore backed by pgvector via DbClient."""
 
-    _ALLOWED_TABLES: frozenset[str] = frozenset(
-        {"knowledge.chunks", "knowledge.org_memories"}
-    )
+    _ALLOWED_TABLES: frozenset[str] = frozenset({"knowledge.chunks", "knowledge.org_memories"})
 
     def __init__(self, db: DbClient) -> None:
         self._db = db
@@ -53,6 +51,9 @@ class PgVectorStore:
         table: str,
         top_k: int = 5,
         filter: dict[str, Any] | None = None,
+        *,
+        visibility_user_id: UUID | None = None,
+        visibility_department_ids: list[UUID] | None = None,
     ) -> list[VectorSearchResult]:
         self._check_table(table)
         params: list[Any] = [str(embedding)]
@@ -60,6 +61,23 @@ class PgVectorStore:
             f"SELECT id, embedding <=> CAST(:p0 AS vector) AS score "
             f"FROM {table} WHERE tenant_id = :tenant_id AND embedding IS NOT NULL"
         )
+        if visibility_user_id is not None:
+            user_param = len(params)
+            params.append(visibility_user_id)
+            visibility_parts = [
+                "scope = 'enterprise'",
+                f"(scope = 'personal' AND owner_id = :p{user_param})",
+            ]
+            department_ids = visibility_department_ids or []
+            if department_ids:
+                department_params: list[str] = []
+                for department_id in department_ids:
+                    department_params.append(f":p{len(params)}")
+                    params.append(department_id)
+                visibility_parts.append(
+                    f"(scope = 'department' AND owner_id IN ({', '.join(department_params)}))"
+                )
+            sql += f" AND ({' OR '.join(visibility_parts)})"
         if filter:
             for k, v in filter.items():
                 self._validate_key(k, kind="filter")
@@ -114,10 +132,7 @@ class PgVectorStore:
         if not ids:
             return
         placeholders = ", ".join(f":p{i}" for i in range(len(ids)))
-        sql = (
-            f"DELETE FROM {table} WHERE id IN ({placeholders}) "
-            f"AND tenant_id = :p{len(ids)}"
-        )
+        sql = f"DELETE FROM {table} WHERE id IN ({placeholders}) AND tenant_id = :p{len(ids)}"
         params: list[Any] = list(ids) + [tenant_id]
         await self._db.execute(sql, *params)
 

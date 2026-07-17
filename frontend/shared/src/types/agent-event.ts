@@ -8,6 +8,7 @@ export type AgentEventType =
   | "tool_result"
   | "reflect"
   | "reason"
+  | "approval_required"
   | "final"
   | "error";
 
@@ -39,7 +40,8 @@ export interface InvokeRequest {
 export interface ResumeRequest {
   agent_id: string;
   approval_id: string;
-  decision: "approved" | "rejected";
+  /** Deprecated compatibility field; the server reads the persisted decision. */
+  decision?: "approved" | "rejected" | "";
   reason?: string | null;
 }
 
@@ -48,9 +50,20 @@ export interface ResumeRequest {
  * The backend embeds it in the message:
  *   "approval {uuid} required for {op} on {resource}"
  */
-const APPROVAL_ID_RE = /approval ([0-9a-f-]{36})/i;
+const APPROVAL_ID_RE = /(?:approval(?:_id)?[=:\s(]+)([0-9a-f-]{36})/i;
 
 export function parseApprovalId(content: string): string | null {
+  try {
+    const payload = JSON.parse(content) as Record<string, unknown>;
+    if (
+      typeof payload.approval_id === "string" &&
+      /^[0-9a-f-]{36}$/i.test(payload.approval_id)
+    ) {
+      return payload.approval_id;
+    }
+  } catch {
+    // Older servers embed the id in plain text; fall through to the regex.
+  }
   const m = content.match(APPROVAL_ID_RE);
   return m?.[1] ?? null;
 }

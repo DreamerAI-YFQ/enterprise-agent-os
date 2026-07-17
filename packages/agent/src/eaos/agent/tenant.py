@@ -1,7 +1,8 @@
 """Tenant manager protocol — multi-tenant Agent lifecycle.
 
-thread_id composite ID: tenant:agent:session. Department shared agents use
-fixed 'shared' session suffix for relay collaboration.
+Every graph thread is isolated by tenant, agent, and session.  Agent scope
+controls capability visibility; it must never collapse unrelated user sessions
+onto one LangGraph checkpoint.  Explicit collaboration uses its own session id.
 """
 
 from __future__ import annotations
@@ -9,11 +10,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
-from eaos.agent.dispatcher import AgentConfig, AgentDispatcher, AgentScope
-
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from eaos.agent.dispatcher import AgentConfig, AgentDispatcher, AgentScope
     from eaos.infra.db.base import DbClient
 
 
@@ -49,10 +49,12 @@ class TenantManager(Protocol):
 class PgTenantManager:
     """TenantManager backed by PostgreSQL.
 
-    thread_id composite format:
-      - PERSONAL: ``tenant:{tenant_id}:agent:{agent_id}:session:{session_id}``
-      - DEPARTMENT/COMPANY: ``tenant:{tenant_id}:agent:{agent_id}:session:shared``
-    A None session_id falls back to the ``default`` suffix (PERSONAL only).
+    Thread id format for every scope:
+    ``tenant:{tenant_id}:agent:{agent_id}:session:{session_id}``.
+
+    A missing session id gets a fresh UUID for that one resolution, so callers
+    cannot accidentally share a checkpoint. HTTP entry points create a
+    concrete session before invoking the runner.
     """
 
     def __init__(self, db: DbClient, dispatcher: AgentDispatcher) -> None:
@@ -78,9 +80,7 @@ class PgTenantManager:
         name: str,
         creator: UUID,
     ) -> AgentConfig:
-        return await self._dispatcher.create_agent(
-            tenant_id, scope, owner_id, name, creator
-        )
+        return await self._dispatcher.create_agent(tenant_id, scope, owner_id, name, creator)
 
     async def resolve_thread_id(
         self,
@@ -89,10 +89,6 @@ class PgTenantManager:
         session_id: UUID | None,
         scope: AgentScope,
     ) -> str:
-        if scope == AgentScope.PERSONAL:
-            suffix = str(session_id) if session_id is not None else "default"
-        else:
-            # DEPARTMENT and COMPANY use a fixed 'shared' suffix so all members
-            # of the scope share one LangGraph checkpoint (relay collaboration).
-            suffix = "shared"
+        del scope  # capability scope does not weaken conversation isolation
+        suffix = str(session_id or uuid4())
         return f"tenant:{tenant_id}:agent:{agent_id}:session:{suffix}"

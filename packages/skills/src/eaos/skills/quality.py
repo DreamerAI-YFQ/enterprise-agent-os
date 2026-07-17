@@ -143,4 +143,3 @@ class PgSkillQualityMonitor:
             )
             return True
         return False
-
