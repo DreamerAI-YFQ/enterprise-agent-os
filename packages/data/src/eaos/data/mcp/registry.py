@@ -177,9 +177,18 @@ class ToolRegistry:
 
         The actual DB column resolution (customer_code→customer_id UUID lookup)
         happens in the ErpConnector._resolve_write_args() method, which has DB
-        access. Here we just pass through the args — the connector handles the
-        transformation at write time.
+        access. Sales-order prices are server-owned product-master data: an
+        LLM-proposed ``unit_price`` must not change the intent or idempotency key.
         """
+        if tool_name == "erp_create_sales_order":
+            customer_code = arguments.get("customer_code", arguments.get("customer_id"))
+            product_sku = arguments.get("product_sku", arguments.get("product_id"))
+            canonical = {
+                "customer_code": customer_code,
+                "product_sku": product_sku,
+                "quantity": arguments.get("quantity"),
+            }
+            return {key: value for key, value in canonical.items() if value is not None}
         return dict(arguments)  # shallow copy to avoid mutating caller's dict
 
     async def call_write_tool(

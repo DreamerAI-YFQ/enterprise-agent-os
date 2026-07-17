@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from eaos.core.execution import ToolExecutionContext
 from eaos.data.connector import (
     DataResource,
     DataResult,
@@ -457,6 +458,58 @@ class TestToolRegistryCallToolErrors:
 
         assert result.is_error is True
         assert "DB connection lost" in (result.error_message or "")
+
+
+class TestToolRegistryWriteNormalization:
+    async def test_sales_order_model_price_does_not_change_idempotency(self) -> None:
+        registry = ToolRegistry()
+        pipeline = AsyncMock()
+        pipeline.execute.return_value = WriteOutcome(success=True)
+        registry.set_write_pipeline(pipeline)
+        registry.register_write_tool(
+            "erp_create_sales_order",
+            resource="orders",
+            operation="create",
+            risk_level="high",
+        )
+        ctx = ToolExecutionContext(
+            tenant_id=TID,
+            user_id=UUID("00000000-0000-0000-0000-000000000201"),
+            agent_id=UUID("00000000-0000-0000-0000-000000000301"),
+            session_id=UUID("00000000-0000-0000-0000-000000000401"),
+            agent_scope="personal",
+        )
+
+        await registry.call_write_tool(
+            "erp_create_sales_order",
+            {
+                "customer_code": "CUS-TECH-0001",
+                "product_sku": "PRD-ELEC-001",
+                "quantity": 3,
+                "unit_price": 0,
+                "amount": 0,
+            },
+            ctx,
+        )
+        await registry.call_write_tool(
+            "erp_create_sales_order",
+            {
+                "customer_id": "CUS-TECH-0001",
+                "product_id": "PRD-ELEC-001",
+                "quantity": 3,
+            },
+            ctx,
+        )
+
+        first_intent = pipeline.execute.await_args_list[0].args[0]
+        second_intent = pipeline.execute.await_args_list[1].args[0]
+        assert first_intent.data == {
+            "customer_code": "CUS-TECH-0001",
+            "product_sku": "PRD-ELEC-001",
+            "quantity": 3,
+        }
+        assert second_intent.data == first_intent.data
+        assert second_intent.idempotency_key == first_intent.idempotency_key
 
 
 class TestToolRegistryResumeWrite:
