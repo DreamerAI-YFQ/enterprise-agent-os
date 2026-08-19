@@ -79,3 +79,6 @@ uploads/
 artifacts/competition-evidence/
 artifacts/db-snapshots/
 benchmarks/competition/results/
+
+# Documentation (local development only, not committed)
+docs/
